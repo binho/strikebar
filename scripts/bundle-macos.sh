@@ -84,7 +84,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>Strikebar</string>
   <key>CFBundleDisplayName</key><string>Strikebar</string>
-  <key>CFBundleIdentifier</key><string>dev.local.strikebar</string>
+  <key>CFBundleIdentifier</key><string>dev.cleber.strikebar</string>
   <key>CFBundleExecutable</key><string>strikebar</string>
   <key>CFBundleIconFile</key><string>Strikebar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
