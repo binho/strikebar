@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Strikebar app icon. A page of text with one line struck out by a solid
+       bar whose end breaks into pixel blocks (the app's Fill and Pixelate styles).
+       Follows the macOS icon grid: an 824 px body centred on a 1024 px canvas. -->
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfcf9"/>
+      <stop offset="1" stop-color="#e7e3da"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c3038"/>
+      <stop offset="1" stop-color="#121418"/>
+    </linearGradient>
+    <filter id="body-shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+    <filter id="bar-shadow" x="-10%" y="-30%" width="120%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#000" flood-opacity="0.22"/>
+    </filter>
+    <clipPath id="body">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#paper)" filter="url(#body-shadow)"/>
+
+  <g clip-path="url(#body)">
+    <!-- lines of text -->
+    <g fill="#cbc6bb">
+      <rect x="212" y="250" width="600" height="52" rx="26"/>
+      <rect x="212" y="626" width="556" height="52" rx="26"/>
+      <rect x="212" y="726" width="380" height="52" rx="26"/>
+    </g>
+
+    <!-- the strike bar, slightly tilted like a hand-placed box -->
+    <g transform="rotate(-4 512 460)" filter="url(#bar-shadow)">
+      <!-- rounded on the left only, so it meets the first column of blocks cleanly -->
+      <path d="M188 382 H729 V538 H188 A20 20 0 0 1 168 518 V402 A20 20 0 0 1 188 382 Z" fill="url(#bar)"/>
+      <!-- pixel blocks fading out of the bar's end -->
+      <rect x="728" y="382" width="53" height="53" fill="#262a31"/>
+      <rect x="728" y="434" width="53" height="53" fill="#3a3f48"/>
+      <rect x="728" y="486" width="53" height="53" fill="#1c1f24"/>
+      <rect x="780" y="382" width="53" height="53" fill="#5d636e"/>
+      <rect x="780" y="486" width="53" height="53" fill="#747a85"/>
+      <rect x="832" y="434" width="53" height="53" fill="#a7abb3"/>
+    </g>
+  </g>
+</svg>
