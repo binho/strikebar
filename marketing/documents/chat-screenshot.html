@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- Fictional phone screenshot of a chat, for App Store screenshots. The app UI is
+     generic and every name, address and number is made up (555 phone numbers,
+     example.com email). Rendered at 390×844 CSS px, 3×. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #fff; }
+  .page { width: 390px; height: 844px; position: relative; overflow: hidden;
+          font: 16px/1.35 system-ui; color: #111; background: #fff; }
+  .status { height: 47px; display: flex; align-items: center; justify-content: space-between;
+            padding: 0 30px 0 34px; font: 600 16px/1 system-ui; }
+  .status .icons { display: flex; gap: 6px; align-items: center; }
+  .bar { width: 4px; background: #111; border-radius: 1px; display: inline-block; }
+  .battery { width: 25px; height: 12px; border: 1.5px solid #11111180; border-radius: 4px;
+             position: relative; }
+  .battery::after { content: ""; position: absolute; inset: 1.5px; right: 6px;
+                    background: #111; border-radius: 1.5px; }
+  .top { display: flex; align-items: center; gap: 12px; padding: 8px 16px 12px;
+         border-bottom: 1px solid #ececf0; }
+  .back { font: 400 30px/1 system-ui; color: #3b6fe0; margin-right: 2px; margin-top: -4px; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%;
+            background: linear-gradient(135deg, #f6a96b, #e76f8b); color: #fff;
+            font: 600 15px/40px system-ui; text-align: center; flex: none; }
+  .who { line-height: 1.2; }
+  .who b { display: block; font-weight: 600; font-size: 16px; }
+  .who span { font-size: 12.5px; color: #8a8f99; }
+  .thread { padding: 14px 14px 0; display: flex; flex-direction: column; gap: 7px; }
+  .day { align-self: center; font: 500 12px/1 system-ui; color: #8a8f99; margin: 4px 0 8px; }
+  .msg { max-width: 76%; padding: 9px 13px; border-radius: 19px; font-size: 15.5px; }
+  .in { align-self: flex-start; background: #eef0f4; border-bottom-left-radius: 6px; }
+  .out { align-self: flex-end; background: #3b6fe0; color: #fff; border-bottom-right-radius: 6px; }
+  .tight { margin-top: -3px; }
+  .compose { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 14px 34px;
+             display: flex; gap: 10px; align-items: center; background: #fff; }
+  .compose .field { flex: 1; height: 36px; border: 1px solid #dfe2e8; border-radius: 18px;
+                    font-size: 15px; color: #a3a8b2; display: flex; align-items: center; padding: 0 14px; }
+  .compose .plus { width: 34px; height: 34px; border-radius: 50%; background: #eef0f4;
+                   font: 400 24px/33px system-ui; text-align: center; color: #6b7180; }
+  #boxes { display: none; }
+  [data-r] { white-space: nowrap; }
+</style>
+</head>
+<body data-dpr="3">
+<div class="page">
+  <div class="status">
+    <span>9:41</span>
+    <span class="icons">
+      <span class="bar" style="height:5px"></span><span class="bar" style="height:7px"></span>
+      <span class="bar" style="height:9px"></span><span class="bar" style="height:11px"></span>
+      <span class="battery"></span>
+    </span>
+  </div>
+  <div class="top">
+    <span class="back">‹</span>
+    <span class="avatar" data-r="avatar" data-pad="3">JR</span>
+    <span class="who"><b data-r="name" data-pad="3">Jordan Reyes</b><span data-r="handle" data-pad="2">mobile · (555) 014-2290</span></span>
+  </div>
+  <div class="thread">
+    <div class="day">Today 8:12 AM</div>
+    <div class="msg in">Landed! Sending you the details for Saturday 🎉</div>
+    <div class="msg in tight">The address is <span data-r="address" data-pad="2">1842 Larkspur Ave, Apt 3B</span></div>
+    <div class="msg in tight">Gate code is <span data-r="gate" data-pad="2">4471#</span>, then buzz 3B</div>
+    <div class="msg out">Perfect. What's your number in case I get lost?</div>
+    <div class="msg in"><span data-r="phone" data-pad="2">(555) 014-2290</span>, call anytime</div>
+    <div class="msg out">And the Wi-Fi? 🙏</div>
+    <div class="msg in">Larkspur-Guest, password <span data-r="wifi" data-pad="2">tangerine-otter-92</span></div>
+    <div class="msg in tight">For the deposit, send it to <span data-r="email" data-pad="2">jordan.reyes@example.com</span></div>
+    <div class="msg out">Done ✅ See you Saturday!</div>
+  </div>
+  <div class="compose"><span class="plus">+</span><span class="field">Message</span></div>
+</div>
+<pre id="boxes"></pre>
+<script src="boxes.js"></script>
+</body>
+</html>

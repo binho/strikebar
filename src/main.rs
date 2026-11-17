@@ -3,6 +3,7 @@
 mod app;
 mod loader;
 mod redact;
+mod screenshots;
 mod theme;
 
 const APP_NAME: &str = "Strikebar";
@@ -10,7 +11,11 @@ const APP_NAME: &str = "Strikebar";
 fn main() -> eframe::Result {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(APP_NAME)
-        .with_inner_size([1280.0, 820.0])
+        .with_inner_size(if std::env::var_os(screenshots::ENV).is_some() {
+            screenshots::WINDOW_SIZE
+        } else {
+            [1280.0, 820.0]
+        })
         .with_min_inner_size([720.0, 420.0])
         .with_drag_and_drop(true)
         // macOS: draw our own title bar under the traffic lights, like Zed.

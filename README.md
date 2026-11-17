@@ -2,6 +2,8 @@
 
 Small native app for redacting parts of images. Rust + egui (eframe). Runs on macOS, Windows and Linux.
 
+![Strikebar with names, amounts and a signature blacked out in a memo](docs/screenshots/blackout.png)
+
 ## Build requirements
 
 HEIC/HEIF support uses [libheif](https://github.com/strukturag/libheif) (via `libheif-rs`), found with `pkg-config`:
@@ -34,11 +36,16 @@ The bundle is self-contained (runs without Homebrew):
 
 ## Use
 
+![A chat screenshot with the contact, address and codes pixelated](docs/screenshots/pixelate.png)
+
+![Pill-shaped boxes following a tilted, photographed lab report](docs/screenshots/pills.png)
+
 - **Open**: ⌘O / Open…, drag files onto the window, or pass paths on the command line.
 - **Draw**: drag on empty space to add a box. The new box is selected.
 - **Edit a box**: click it to select (outline + handles). Drag inside to move, drag a handle to resize, drag the ○ above it to rotate (Shift snaps to 15°) or type an angle in the toolbar. Pick Fill/Pixelate, a color or the block size to restyle it. Esc deselects.
 - **Delete**: acts on what you clicked last. On the canvas it removes the selected box (right-click also removes a box); in the sidebar it removes the selected image from the list (the file on disk is untouched). ⌘Z undoes the last box.
 - **Style**: `F` fill with a solid color (black, white, gray, red, yellow or blue; all opaque, safe for anything) or `P` pixelate (large blocks plus random noise; blocks follow the box's rotation). Block size scales with the image (default 1/80 of its long side: ~100 px on a 48 MP photo, 20 px on a 1600 px screenshot), never below 1/200 of it.
+- **Shape**: rectangle or pill (fully rounded ends), from the two buttons next to Fill/Pixelate. Like the style, it applies to new boxes and to the selected one. Rotation works with both; pill corners are left uncovered, so make the box big enough for what it hides.
 - **Navigate**: two-finger scroll, middle-drag or Space+drag to pan; pinch, ⌘/Ctrl+scroll or ⌘+ / ⌘− to zoom; `0` or ⌘0 fit, `1` 100%; ↑/↓ switch images.
 - **Formats**: PNG, JPEG, WebP, BMP, TIFF, GIF and HEIC/HEIF (read only). HEIC and GIF can't be written back, so their copies are saved as `name-redacted.jpg` and *Overwrite* is disabled for them.
 - **Save**: *Save copy* (⌘S) writes `name-redacted.ext` next to the original; *Save all copies* does it for every image with boxes; *Overwrite original…* replaces the file after confirming.
@@ -58,3 +65,16 @@ The bundle is self-contained (runs without Homebrew):
 - `src/redact.rs` — UI-free core: regions in image coordinates, apply black/pixelate, load, save, copy naming. Unit tested (`cargo test`).
 - `src/app.rs` — egui UI: title bar, image list, editor toolbar, canvas with zoom/pan/selection, status bar.
 - `src/theme.rs` — Zed-like look: One Dark colors, spacing, Lucide icons (`lucide-icons` crate), system UI font (SF Pro / Segoe UI when available).
+
+## Screenshots
+
+The screenshots above and the Mac App Store ones are generated, so they can be redone after UI changes:
+
+```bash
+./scripts/bundle-macos.sh
+./marketing/capture.sh       # → target/marketing/appstore/*.png (2560×1600) and framed/readme/*.png
+```
+
+- `marketing/documents/` holds fictional documents (made-up companies, people and numbers) as HTML. Headless Chrome renders them and reports where each `data-r` element is, in image pixels.
+- `marketing/scenes/` are scene scripts: which document to show, where to put boxes (`box @name`), what to select, which menu to open. The app runs them in capture mode (`STRIKEBAR_SCREENSHOTS=<folder>`, see `src/screenshots.rs`) and saves the window at 1280×800 points, 2560×1600 pixels.
+- `scripts/frame-screenshots.sh` adds the traffic lights (macOS draws them, so the app's own capture lacks them), and `marketing/frame.html` adds each App Store headline.

@@ -1,0 +1,90 @@
+<!doctype html>
+<!-- Fictional lab report, photographed slightly tilted on a desk, for App Store
+     screenshots. The clinic, patient and every value are made up.
+     Rendered at 1100×1300 CSS px, 2×. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  html { background: radial-gradient(120% 90% at 40% 30%, #b8ab98 0%, #9c8e7a 55%, #7d705f 100%); }
+  body { width: 1100px; height: 1300px; overflow: hidden; }
+  .page {
+    position: absolute; left: 150px; top: 95px; width: 800px; height: 1080px;
+    box-sizing: border-box; padding: 64px 70px; background: #fbfaf6; color: #222;
+    font: 15px/1.5 system-ui; transform: rotate(-3.5deg);
+    box-shadow: 0 2px 4px rgba(0,0,0,.18), 0 18px 40px rgba(40,25,10,.35);
+  }
+  .head { display: flex; justify-content: space-between; align-items: flex-start;
+          border-bottom: 2px solid #2d6a5a; padding-bottom: 16px; }
+  .clinic { font: 700 22px/1.2 system-ui; color: #2d6a5a; }
+  .clinic small { display: block; font: 500 12.5px/1.6 system-ui; color: #6b7280; }
+  .title { text-align: right; font: 600 13px/1.5 system-ui; color: #6b7280;
+           letter-spacing: 0.08em; text-transform: uppercase; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 40px; margin: 26px 0 28px; }
+  .field b { display: block; font: 600 11px/1.4 system-ui; letter-spacing: 0.08em;
+             text-transform: uppercase; color: #8a8f99; }
+  .field span { font-size: 16px; }
+  h2 { font: 650 17px/1.3 system-ui; margin: 0 0 10px; }
+  table { width: 100%; border-collapse: collapse; font: 14.5px/1.4 system-ui; margin-bottom: 26px; }
+  th { text-align: left; font: 600 11px/1.4 system-ui; letter-spacing: 0.08em; text-transform: uppercase;
+       color: #8a8f99; border-bottom: 1.5px solid #333; padding: 7px 6px; }
+  td { padding: 9px 6px; border-bottom: 1px solid #e6e3da; }
+  td.v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .flag { color: #b4442f; }
+  .note { font-size: 14px; color: #444; background: #f1efe7; border-left: 3px solid #2d6a5a;
+          padding: 12px 14px; }
+  .signed { margin-top: 18px; font-size: 13px; color: #555; }
+  .foot { position: absolute; left: 70px; right: 70px; bottom: 40px; display: flex;
+          justify-content: space-between; font: 11.5px/1 system-ui; color: #8a8f99; }
+  #boxes { display: none; }
+  [data-r] { white-space: nowrap; }
+</style>
+</head>
+<body data-dpr="2">
+<div class="page" data-angle="-3.5">
+  <div class="head">
+    <div class="clinic">Cedar Hollow Medical Group<small>Clinical Laboratory · 400 Alder Way, Suite 210</small></div>
+    <div class="title">Laboratory report<br>Final</div>
+  </div>
+
+  <div class="grid">
+    <div class="field"><b>Patient</b><span data-r="patient">Eleanor M. Castillo</span></div>
+    <div class="field"><b>Date of birth</b><span data-r="dob">07/22/1984</span></div>
+    <div class="field"><b>Medical record no.</b><span data-r="mrn">MRN 00-4821-7736</span></div>
+    <div class="field"><b>Collected</b><span>03/09/2026 · 7:42 AM</span></div>
+    <div class="field"><b>Address</b><span data-r="address">2210 Wren Hollow Rd, Marlow</span></div>
+    <div class="field"><b>Ordering physician</b><span>Dr. Samuel Achebe</span></div>
+  </div>
+
+  <h2>Comprehensive metabolic panel</h2>
+  <table>
+    <tr><th>Test</th><th>Result</th><th>Reference</th><th>Units</th></tr>
+    <tr><td>Glucose, fasting</td><td class="v flag">112 H</td><td>70–99</td><td>mg/dL</td></tr>
+    <tr><td>Hemoglobin A1c</td><td class="v flag">6.1 H</td><td>4.0–5.6</td><td>%</td></tr>
+    <tr><td>Creatinine</td><td class="v">0.84</td><td>0.57–1.00</td><td>mg/dL</td></tr>
+    <tr><td>Sodium</td><td class="v">139</td><td>134–144</td><td>mmol/L</td></tr>
+    <tr><td>Potassium</td><td class="v">4.2</td><td>3.5–5.2</td><td>mmol/L</td></tr>
+    <tr><td>Cholesterol, total</td><td class="v flag">221 H</td><td>100–199</td><td>mg/dL</td></tr>
+    <tr><td>LDL cholesterol</td><td class="v flag">138 H</td><td>0–99</td><td>mg/dL</td></tr>
+  </table>
+
+  <h2>Complete blood count</h2>
+  <table>
+    <tr><th>Test</th><th>Result</th><th>Reference</th><th>Units</th></tr>
+    <tr><td>White blood cells</td><td class="v">6.4</td><td>3.4–10.8</td><td>×10³/µL</td></tr>
+    <tr><td>Hemoglobin</td><td class="v">13.2</td><td>11.1–15.9</td><td>g/dL</td></tr>
+    <tr><td>Platelets</td><td class="v">248</td><td>150–450</td><td>×10³/µL</td></tr>
+  </table>
+
+  <div class="note">Results reviewed. Follow up in 3 months to recheck A1c and lipids.
+    Questions: call the lab at <span data-r="phone" data-pad="2">(555) 019-4410</span>.</div>
+
+  <div class="signed">Electronically signed by <span data-r="signer" data-pad="2">Ruth Delacroix, MT(ASCP)</span> · 03/10/2026 10:15 AM</div>
+
+  <div class="foot"><span>Specimen ID <span data-r="specimen" data-pad="2">CH-26-0309-1187</span></span><span>Page 1 of 1</span></div>
+</div>
+<pre id="boxes"></pre>
+<script src="boxes.js"></script>
+</body>
+</html>

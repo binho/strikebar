@@ -8,7 +8,8 @@ use image::RgbaImage;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 
 use crate::loader::{LoadResult, Loader};
-use crate::redact::{self, FillColor, Region, SaveSize, Style};
+use crate::redact::{self, FillColor, Region, SaveSize, Shape, Style};
+use crate::screenshots::{Capture, Command};
 use crate::theme::{self, Icon};
 
 const MIN_ZOOM: f32 = 0.02;
@@ -251,8 +252,12 @@ impl Doc {
         self.to_screen(canvas, pos2(x, y))
     }
 
-    fn screen_corners(&self, canvas: Rect, r: &Region) -> [Pos2; 4] {
-        r.corners().map(|(x, y)| self.to_screen(canvas, pos2(x, y)))
+    /// The box's outline (corners, or the rounded pill edge) in screen space.
+    fn screen_outline(&self, canvas: Rect, r: &Region) -> Vec<Pos2> {
+        r.outline()
+            .into_iter()
+            .map(|(x, y)| self.to_screen(canvas, pos2(x, y)))
+            .collect()
     }
 
     /// The rotate handle: above the middle of the box's top edge, following its rotation.
@@ -429,20 +434,20 @@ fn color_image(img: &RgbaImage, max_side: usize) -> egui::ColorImage {
 }
 
 /// Accent outline over a dark edge, so the selection shows on any background.
-fn draw_outline(painter: &egui::Painter, corners: [Pos2; 4]) {
+fn draw_outline(painter: &egui::Painter, outline: &[Pos2]) {
     painter.add(egui::Shape::closed_line(
-        corners.to_vec(),
+        outline.to_vec(),
         Stroke::new(3.0, Color32::from_black_alpha(170)),
     ));
     painter.add(egui::Shape::closed_line(
-        corners.to_vec(),
+        outline.to_vec(),
         Stroke::new(1.5, theme::ACCENT),
     ));
 }
 
 /// Selected box: outline, resize handles, and the rotate handle above it.
 fn draw_selection(painter: &egui::Painter, doc: &Doc, canvas: Rect, r: &Region, handles: bool) {
-    draw_outline(painter, doc.screen_corners(canvas, r));
+    draw_outline(painter, &doc.screen_outline(canvas, r));
     if !handles {
         return;
     }
@@ -478,21 +483,32 @@ fn style_color(style: Style, alpha: u8) -> Color32 {
 }
 
 /// Live preview of a region while it's drawn, moved, resized or rotated.
-fn draw_live(painter: &egui::Painter, corners: [Pos2; 4], style: Style) {
+fn draw_live(painter: &egui::Painter, outline: &[Pos2], style: Style) {
     painter.add(egui::Shape::convex_polygon(
-        corners.to_vec(),
+        outline.to_vec(),
         style_color(style, 170),
         Stroke::NONE,
     ));
 }
 
-fn rect_corners(r: Rect) -> [Pos2; 4] {
-    [
-        r.left_top(),
-        r.right_top(),
-        r.right_bottom(),
-        r.left_bottom(),
-    ]
+/// Outline of an unrotated box with this shape, for a screen-space rect.
+fn rect_outline(r: Rect, shape: Shape) -> Vec<Pos2> {
+    let screen_box = Region {
+        cx: r.center().x,
+        cy: r.center().y,
+        w: r.width().max(1.0),
+        h: r.height().max(1.0),
+        angle: 0.0,
+        shape,
+        style: Style::Pixelate,
+        block: redact::MIN_BLOCK,
+        seed: 0,
+    };
+    screen_box
+        .outline()
+        .into_iter()
+        .map(|(x, y)| pos2(x, y))
+        .collect()
 }
 
 /// Small accent dot for unsaved changes.
@@ -624,6 +640,11 @@ pub struct StrikebarApp {
     block_fraction: f32,
     /// Color the Fill style uses for new boxes.
     fill_color: FillColor,
+    /// Shape for new boxes (and the selected one, when changed).
+    shape: Shape,
+    /// Width of the editor toolbar's tools last frame, so the breadcrumb to their
+    /// left can be truncated instead of running into them.
+    toolbar_tools_width: f32,
     /// Size saved images are scaled down to (all saves, overwrite included).
     save_size: SaveSize,
     drag: Option<DragOp>,
@@ -639,6 +660,10 @@ pub struct StrikebarApp {
     batch_done: usize,
     batch_errors: Vec<String>,
     batch_started: std::time::Instant,
+    /// Set by `STRIKEBAR_SCREENSHOTS`, see `screenshots.rs`.
+    capture: Option<Capture>,
+    /// A screenshot scene asked for the save size menu to be open.
+    open_size_menu: bool,
 }
 
 impl StrikebarApp {
@@ -652,6 +677,8 @@ impl StrikebarApp {
             style: Style::Fill(FillColor::Black),
             block_fraction: redact::DEFAULT_BLOCK_FRACTION,
             fill_color: FillColor::Black,
+            shape: Shape::Rect,
+            toolbar_tools_width: 0.0,
             save_size: SaveSize::Original,
             drag: None,
             focus: Focus::Sidebar,
@@ -664,6 +691,8 @@ impl StrikebarApp {
             batch_done: 0,
             batch_errors: Vec::new(),
             batch_started: std::time::Instant::now(),
+            capture: Capture::from_env(),
+            open_size_menu: false,
         };
         app.open_paths(&cc.egui_ctx, paths);
         app
@@ -857,6 +886,78 @@ impl StrikebarApp {
         }
     }
 
+    /// Applies screenshot scene commands (see `screenshots.rs`).
+    fn run_scene(&mut self, commands: Vec<Command>) {
+        for command in commands {
+            match command {
+                Command::Doc(name) => match self.docs.iter().position(|d| d.name == name) {
+                    Some(i) => self.current = Some(i),
+                    None => eprintln!("scene: no open image named {name}"),
+                },
+                Command::Clear => self.clear(),
+                Command::Box {
+                    cx,
+                    cy,
+                    w,
+                    h,
+                    style,
+                    shape,
+                    angle_deg,
+                    block,
+                } => {
+                    let fraction = self.block_fraction;
+                    let Some(doc) = self.doc() else { continue };
+                    let (iw, ih) = doc.original.dimensions();
+                    let block = block.unwrap_or_else(|| redact::block_for(fraction, iw, ih));
+                    let Some(mut r) = Region::from_points(
+                        (cx - w / 2.0, cy - h / 2.0),
+                        (cx + w / 2.0, cy + h / 2.0),
+                        iw,
+                        ih,
+                        style,
+                        block,
+                    ) else {
+                        eprintln!("scene: box {cx},{cy} {w}×{h} is outside the image");
+                        continue;
+                    };
+                    r = r.rotated_to(angle_deg.to_radians());
+                    r.shape = shape;
+                    doc.regions.push(r);
+                    doc.selected = Some(doc.regions.len() - 1);
+                    doc.mark_dirty(PxRect::of(&r));
+                    doc.unsaved = true;
+                }
+                Command::Select(i) => {
+                    if let Some(doc) = self.doc() {
+                        doc.selected = i.filter(|&i| i < doc.regions.len());
+                    }
+                    self.sync_style_from_selection();
+                }
+                Command::Size(size) => self.save_size = size,
+                Command::OpenSizeMenu => self.open_size_menu = true,
+                Command::Save => {
+                    if let Some(i) = self.current {
+                        self.save_copy(i);
+                    }
+                }
+                Command::SaveAll => self.save_all_copies(),
+            }
+        }
+    }
+
+    /// Changes the shape for new boxes and, if a box is selected, for that box too.
+    fn set_shape(&mut self, shape: Shape) {
+        self.shape = shape;
+        if let Some(doc) = self.doc()
+            && let Some(i) = doc.selected
+            && doc.regions[i].shape != shape
+        {
+            doc.regions[i].shape = shape;
+            doc.mark_region_dirty(i);
+            doc.unsaved = true;
+        }
+    }
+
     fn undo(&mut self) {
         if let Some(doc) = self.doc()
             && !doc.regions.is_empty()
@@ -1019,6 +1120,7 @@ impl StrikebarApp {
             && let Some(doc) = self.current.map(|i| &self.docs[i])
         {
             self.style = r.style;
+            self.shape = r.shape;
             self.block_fraction = block_fraction_of(&r, &doc.original);
         }
     }
@@ -1266,6 +1368,9 @@ impl StrikebarApp {
                 }
             })
             .response;
+        if std::mem::take(&mut self.open_size_menu) {
+            egui::Popup::open_id(ui.ctx(), response.id.with("popup"));
+        }
         let hint = match current {
             Some((w, h)) => {
                 let (nw, nh) = self.save_size.dimensions(w, h);
@@ -1293,6 +1398,7 @@ impl StrikebarApp {
         }
         let fill_color = self.fill_color;
         let mut style = self.style;
+        let mut shape = self.shape;
         let block_info = self.block_px();
         let start_angle = self.selected_region().map(|r| r.angle.to_degrees().round());
         let mut angle_deg = start_angle;
@@ -1300,132 +1406,185 @@ impl StrikebarApp {
         let mut view = None;
         let (mut undo, mut clear) = (false, false);
 
-        ui.horizontal_centered(|ui| {
-            if let Some(doc) = self.current.map(|i| &self.docs[i]) {
-                if let Some(dir) = doc
-                    .path
-                    .parent()
-                    .and_then(|p| p.file_name())
-                    .map(|d| d.to_string_lossy().into_owned())
-                {
-                    ui.label(RichText::new(dir).color(theme::TEXT_PLACEHOLDER));
-                    ui.label(
-                        RichText::new(Icon::ChevronRight.unicode().to_string())
-                            .color(theme::TEXT_PLACEHOLDER),
-                    );
-                }
-                ui.label(RichText::new(&doc.name).color(theme::TEXT));
-            }
-
-            // Right to left: the first widget added is the rightmost.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if theme::icon_button(ui, Icon::Scan, has_doc, "Fit to window", Some("0")).clicked()
-                {
-                    view = Some(ViewRequest::Fit);
-                }
-                if theme::icon_button(ui, Icon::ZoomIn, has_doc, "Zoom in", Some("⌘+")).clicked()
-                {
-                    view = Some(ViewRequest::ZoomBy(ZOOM_STEP));
-                }
-                let pct = zoom.map_or("–".to_owned(), |z| format!("{:.0}%", z * 100.0));
-                let pct_button = egui::Button::new(
-                    RichText::new(pct)
-                        .font(egui::FontId::monospace(12.0))
-                        .color(theme::TEXT_MUTED),
-                )
-                .min_size(vec2(48.0, 22.0));
-                if theme::tooltip(
-                    ui.add_enabled(has_doc, pct_button),
-                    "Actual size",
-                    Some("1"),
-                )
-                .clicked()
-                {
-                    view = Some(ViewRequest::Actual);
-                }
-                if theme::icon_button(ui, Icon::ZoomOut, has_doc, "Zoom out", Some("⌘−")).clicked()
-                {
-                    view = Some(ViewRequest::ZoomBy(1.0 / ZOOM_STEP));
-                }
-                theme::divider(ui);
-                clear = theme::icon_button(ui, Icon::Eraser, has_regions, "Remove all boxes", None)
-                    .clicked();
-                undo =
-                    theme::icon_button(ui, Icon::Undo2, has_regions, "Undo last box", Some("⌘Z"))
-                        .clicked();
-                theme::divider(ui);
-
-                if let Style::Fill(current) = style {
-                    // Right to left, so add the swatches in reverse.
-                    for color in FillColor::ALL.iter().rev() {
-                        if color_swatch(ui, *color, *color == current).clicked() {
-                            style = Style::Fill(*color);
+        let tools_width = ui
+            .horizontal_centered(|ui| {
+                // Breadcrumb, truncated to the space the tools leave (they're laid out
+                // after it, so use last frame's width).
+                let crumb_width = (ui.available_width() - self.toolbar_tools_width - 16.0).max(0.0);
+                if let Some(doc) = self.current.map(|i| &self.docs[i]) {
+                    ui.scope(|ui| {
+                        ui.set_max_width(crumb_width);
+                        if let Some(dir) = doc
+                            .path
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .map(|d| d.to_string_lossy().into_owned())
+                        {
+                            ui.add(
+                                egui::Label::new(RichText::new(dir).color(theme::TEXT_PLACEHOLDER))
+                                    .truncate(),
+                            );
+                            ui.label(
+                                RichText::new(Icon::ChevronRight.unicode().to_string())
+                                    .color(theme::TEXT_PLACEHOLDER),
+                            );
                         }
-                    }
+                        ui.add(
+                            egui::Label::new(RichText::new(&doc.name).color(theme::TEXT))
+                                .truncate(),
+                        );
+                    });
                 }
-                if style == Style::Pixelate
-                    && let Some((_, (min, max))) = block_info
-                {
-                    ui.label(
-                        RichText::new(format!("{block}px"))
+
+                // Right to left: the first widget added is the rightmost.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::icon_button(ui, Icon::Scan, has_doc, "Fit to window", Some("0"))
+                        .clicked()
+                    {
+                        view = Some(ViewRequest::Fit);
+                    }
+                    if theme::icon_button(ui, Icon::ZoomIn, has_doc, "Zoom in", Some("⌘+"))
+                        .clicked()
+                    {
+                        view = Some(ViewRequest::ZoomBy(ZOOM_STEP));
+                    }
+                    let pct = zoom.map_or("–".to_owned(), |z| format!("{:.0}%", z * 100.0));
+                    let pct_button = egui::Button::new(
+                        RichText::new(pct)
                             .font(egui::FontId::monospace(12.0))
                             .color(theme::TEXT_MUTED),
-                    );
-                    theme::tooltip(
-                        ui.add(
-                            egui::Slider::new(&mut block, min..=max)
-                                .logarithmic(true)
-                                .show_value(false)
-                                .step_by(1.0),
-                        ),
-                        "Block size (scales with the image's size)",
-                        None,
-                    );
-                }
-                theme::tooltip(
-                    ui.selectable_value(
-                        &mut style,
-                        Style::Pixelate,
-                        theme::icon_text(Icon::Grid2x2, "Pixelate"),
-                    ),
-                    "Big blocks plus random noise",
-                    Some("P"),
-                );
-                let fill_on = matches!(style, Style::Fill(_));
-                if theme::tooltip(
-                    ui.selectable_label(fill_on, theme::icon_text(Icon::PaintBucket, "Fill")),
-                    "Solid color, safe for anything",
-                    Some("F"),
-                )
-                .clicked()
-                    && !fill_on
-                {
-                    style = Style::Fill(fill_color);
-                }
-                if let Some(deg) = angle_deg.as_mut() {
+                    )
+                    .min_size(vec2(48.0, 22.0));
+                    if theme::tooltip(
+                        ui.add_enabled(has_doc, pct_button),
+                        "Actual size",
+                        Some("1"),
+                    )
+                    .clicked()
+                    {
+                        view = Some(ViewRequest::Actual);
+                    }
+                    if theme::icon_button(ui, Icon::ZoomOut, has_doc, "Zoom out", Some("⌘−"))
+                        .clicked()
+                    {
+                        view = Some(ViewRequest::ZoomBy(1.0 / ZOOM_STEP));
+                    }
                     theme::divider(ui);
+                    clear =
+                        theme::icon_button(ui, Icon::Eraser, has_regions, "Remove all boxes", None)
+                            .clicked();
+                    undo = theme::icon_button(
+                        ui,
+                        Icon::Undo2,
+                        has_regions,
+                        "Undo last box",
+                        Some("⌘Z"),
+                    )
+                    .clicked();
+                    theme::divider(ui);
+
+                    if let Style::Fill(current) = style {
+                        // Right to left, so add the swatches in reverse.
+                        for color in FillColor::ALL.iter().rev() {
+                            if color_swatch(ui, *color, *color == current).clicked() {
+                                style = Style::Fill(*color);
+                            }
+                        }
+                    }
+                    if style == Style::Pixelate
+                        && let Some((_, (min, max))) = block_info
+                    {
+                        ui.label(
+                            RichText::new(format!("{block}px"))
+                                .font(egui::FontId::monospace(12.0))
+                                .color(theme::TEXT_MUTED),
+                        );
+                        theme::tooltip(
+                            ui.add(
+                                egui::Slider::new(&mut block, min..=max)
+                                    .logarithmic(true)
+                                    .show_value(false)
+                                    .step_by(1.0),
+                            ),
+                            "Block size (scales with the image's size)",
+                            None,
+                        );
+                    }
                     theme::tooltip(
-                        ui.add(
-                            egui::DragValue::new(deg)
-                                .speed(1.0)
-                                .range(-180.0..=180.0)
-                                .max_decimals(0)
-                                .suffix("°"),
+                        ui.selectable_value(
+                            &mut style,
+                            Style::Pixelate,
+                            theme::icon_text(Icon::Grid2x2, "Pixelate"),
                         ),
-                        "Rotation. Or drag the ○ above the box (Shift snaps to 15°)",
+                        "Big blocks plus random noise",
+                        Some("P"),
+                    );
+                    let fill_on = matches!(style, Style::Fill(_));
+                    if theme::tooltip(
+                        ui.selectable_label(fill_on, theme::icon_text(Icon::PaintBucket, "Fill")),
+                        "Solid color, safe for anything",
+                        Some("F"),
+                    )
+                    .clicked()
+                        && !fill_on
+                    {
+                        style = Style::Fill(fill_color);
+                    }
+                    theme::divider(ui);
+                    // Right to left: Pill ends up to the right of Rectangle.
+                    theme::tooltip(
+                        ui.selectable_value(
+                            &mut shape,
+                            Shape::Pill,
+                            Icon::Pill.unicode().to_string(),
+                        ),
+                        "Pill: rounded ends",
                         None,
                     );
-                    ui.label(
-                        RichText::new(Icon::RotateCw.unicode().to_string())
-                            .color(theme::TEXT_MUTED),
+                    theme::tooltip(
+                        ui.selectable_value(
+                            &mut shape,
+                            Shape::Rect,
+                            Icon::RectangleHorizontal.unicode().to_string(),
+                        ),
+                        "Rectangle",
+                        None,
                     );
-                }
-                if editing_box {
-                    ui.label(RichText::new("Selected box").color(theme::ACCENT));
-                }
-            });
-        });
+                    if let Some(deg) = angle_deg.as_mut() {
+                        theme::divider(ui);
+                        theme::tooltip(
+                            ui.add(
+                                egui::DragValue::new(deg)
+                                    .speed(1.0)
+                                    .range(-180.0..=180.0)
+                                    .max_decimals(0)
+                                    .suffix("°"),
+                            ),
+                            "Rotation. Or drag the ○ above the box (Shift snaps to 15°)",
+                            None,
+                        );
+                        ui.label(
+                            RichText::new(Icon::RotateCw.unicode().to_string())
+                                .color(theme::TEXT_MUTED),
+                        );
+                    }
+                    if editing_box {
+                        ui.label(RichText::new("Selected box").color(theme::ACCENT));
+                    }
+                })
+                .response
+                .rect
+                .width()
+            })
+            .inner;
+        if (tools_width - self.toolbar_tools_width).abs() > 0.5 {
+            self.toolbar_tools_width = tools_width;
+            ui.ctx().request_repaint(); // lay the breadcrumb out again with the new width
+        }
 
+        if shape != self.shape {
+            self.set_shape(shape);
+        }
         let block_changed = block_info.is_some_and(|(px, _)| px != block);
         if style != self.style || block_changed {
             self.set_style(style, block_changed.then_some(block));
@@ -1514,11 +1673,19 @@ impl StrikebarApp {
             ui.set_height(28.0);
             ui.add_space(10.0);
             ui.label(
-                RichText::new(format!("IMAGES  {}", self.docs.len() + self.pending.len()))
-                    .size(11.0)
+                RichText::new("Images")
+                    .size(12.0)
                     .strong()
                     .color(theme::TEXT_MUTED),
             );
+            let count = self.docs.len() + self.pending.len();
+            if count > 0 {
+                ui.label(
+                    RichText::new(count.to_string())
+                        .size(12.0)
+                        .color(theme::TEXT_PLACEHOLDER),
+                );
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(6.0);
                 open =
@@ -1547,6 +1714,13 @@ impl StrikebarApp {
                     )
                     .collect();
                 rows.sort_by_key(|r| r.0);
+                if rows.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("Nothing open yet.").color(theme::TEXT_PLACEHOLDER));
+                    });
+                }
                 for (_, kind) in rows {
                     let i = match kind {
                         Ok(i) => i,
@@ -1594,9 +1768,13 @@ impl StrikebarApp {
                     // Boxes drawn on top, so the thumbnail never needs re-rendering.
                     let scale = thumb.width() / size.x;
                     for r in &doc.regions {
-                        let corners = r.corners().map(|(x, y)| thumb.min + vec2(x, y) * scale);
+                        let outline = r
+                            .outline()
+                            .into_iter()
+                            .map(|(x, y)| thumb.min + vec2(x, y) * scale)
+                            .collect();
                         painter.add(egui::Shape::convex_polygon(
-                            corners.to_vec(),
+                            outline,
                             style_color(r.style, 255),
                             Stroke::NONE,
                         ));
@@ -1775,6 +1953,7 @@ impl StrikebarApp {
             doc.selected = doc.region_at(canvas, p);
             if let Some(r) = doc.selected.map(|i| doc.regions[i]) {
                 self.style = r.style;
+                self.shape = r.shape;
                 self.block_fraction = block_fraction_of(&r, &doc.original);
             }
         }
@@ -1804,6 +1983,7 @@ impl StrikebarApp {
                     if let Some(i) = doc.region_at(canvas, origin) {
                         doc.selected = Some(i);
                         self.style = doc.regions[i].style;
+                        self.shape = doc.regions[i].shape;
                         self.block_fraction = block_fraction_of(&doc.regions[i], &doc.original);
                         Some(DragOp::Move {
                             idx: i,
@@ -1836,7 +2016,7 @@ impl StrikebarApp {
             match *op {
                 DragOp::New { start } => {
                     if response.drag_stopped() {
-                        if let Some(region) = Region::from_points(
+                        if let Some(mut region) = Region::from_points(
                             (start.x, start.y),
                             (pi.x, pi.y),
                             w,
@@ -1844,6 +2024,7 @@ impl StrikebarApp {
                             self.style,
                             redact::block_for(self.block_fraction, w, h),
                         ) {
+                            region.shape = self.shape;
                             doc.regions.push(region);
                             doc.selected = Some(doc.regions.len() - 1);
                             doc.mark_dirty(PxRect::of(&region));
@@ -1922,7 +2103,7 @@ impl StrikebarApp {
         );
         if let Some(i) = doc.editing {
             let r = doc.regions[i];
-            draw_live(&painter, doc.screen_corners(canvas, &r), r.style);
+            draw_live(&painter, &doc.screen_outline(canvas, &r), r.style);
         }
         if let Some(i) = doc.selected {
             let r = doc.regions[i];
@@ -1940,8 +2121,9 @@ impl StrikebarApp {
             }
         }
         if let Some((rect, style)) = live {
-            draw_live(&painter, rect_corners(rect), style);
-            draw_outline(&painter, rect_corners(rect));
+            let outline = rect_outline(rect, self.shape);
+            draw_live(&painter, &outline, style);
+            draw_outline(&painter, &outline);
         }
 
         // Cursor.
@@ -1980,6 +2162,10 @@ impl eframe::App for StrikebarApp {
         let ctx = ui.ctx().clone();
         self.poll_loaded(&ctx);
         self.handle_shortcuts(ui);
+        if let Some(capture) = &mut self.capture {
+            let scene = capture.tick(&ctx);
+            self.run_scene(scene);
+        }
 
         egui::Panel::top("title_bar")
             .exact_size(theme::TITLE_BAR_HEIGHT)

@@ -1,0 +1,20 @@
+# Board memo: names, the target company, amounts and the signature blacked out.
+doc board-memo.png
+clear
+box @to
+box @from
+box @target1
+box @price
+box @target2
+box @n1
+box @a1
+box @n2
+box @a2
+box @n3
+box @a3
+box @n4
+box @a4
+box @acct
+box @sig
+select 6
+shot 01-blackout

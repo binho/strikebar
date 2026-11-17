@@ -65,6 +65,15 @@ pub enum Style {
     Pixelate,
 }
 
+/// Outline of a box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Shape {
+    #[default]
+    Rect,
+    /// Fully rounded ends (a stadium): corner radius is half the short side.
+    Pill,
+}
+
 /// A box in original-image pixel coordinates, possibly rotated about its center.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Region {
@@ -76,6 +85,7 @@ pub struct Region {
     pub h: f32,
     /// Rotation in radians, clockwise on screen (image y points down).
     pub angle: f32,
+    pub shape: Shape,
     pub style: Style,
     /// Block size for [`Style::Pixelate`], in image pixels. Blocks follow the rotation.
     pub block: u32,
@@ -113,6 +123,7 @@ impl Region {
             w: x1 - x0,
             h: y1 - y0,
             angle: 0.0,
+            shape: Shape::Rect,
             style,
             block: block.max(block_range(image_w, image_h).0),
             seed: random_seed(),
@@ -145,6 +156,52 @@ impl Region {
             self.to_image(self.w, self.h),
             self.to_image(0.0, self.h),
         ]
+    }
+
+    /// Outline as a closed polygon in image coordinates, clockwise on screen: the
+    /// four corners for a rectangle, the sampled rounded outline for a pill.
+    /// Convex either way.
+    pub fn outline(&self) -> Vec<(f32, f32)> {
+        match self.shape {
+            Shape::Rect => self.corners().to_vec(),
+            Shape::Pill => {
+                const STEPS: usize = 12; // segments per quarter circle
+                let r = self.w.min(self.h) / 2.0;
+                let centers = [
+                    (self.w - r, r),
+                    (self.w - r, self.h - r),
+                    (r, self.h - r),
+                    (r, r),
+                ];
+                let mut points = Vec::with_capacity(4 * (STEPS + 1));
+                for (q, (cu, cv)) in centers.into_iter().enumerate() {
+                    for i in 0..=STEPS {
+                        // Quarter q runs from -90° + q·90° to q·90° (y points down).
+                        let a = (q as f32 - 1.0 + i as f32 / STEPS as f32)
+                            * std::f32::consts::FRAC_PI_2;
+                        points.push(self.to_image(cu + r * a.cos(), cv + r * a.sin()));
+                    }
+                }
+                points
+            }
+        }
+    }
+
+    /// Signed distance from a point in this box's frame to its pill outline:
+    /// negative inside.
+    fn pill_distance(&self, u: f32, v: f32) -> f32 {
+        let r = self.w.min(self.h) / 2.0;
+        let qx = (u - self.w / 2.0).abs() - (self.w / 2.0 - r);
+        let qy = (v - self.h / 2.0).abs() - (self.h / 2.0 - r);
+        qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
+    }
+
+    /// Whether a point in this box's frame is inside its shape.
+    fn inside_local(&self, u: f32, v: f32) -> bool {
+        match self.shape {
+            Shape::Rect => u >= 0.0 && v >= 0.0 && u < self.w && v < self.h,
+            Shape::Pill => self.pill_distance(u, v) < 0.0,
+        }
     }
 
     /// Axis-aligned bounds `(min_x, min_y, max_x, max_y)` of the rotated box.
@@ -244,11 +301,19 @@ impl Region {
     /// Uses the distance from the pixel center to each pair of sides, scaled by the
     /// pixel's width across a rotated side (1 when straight, √2 at 45°). Straight,
     /// whole-pixel boxes come out exactly 0 or 1, so they stay pixel-crisp.
+    ///
+    /// Pills use the distance to their rounded outline the same way, so their
+    /// straight sides match a rectangle's and the ends are smooth.
     fn coverage(&self, x: u32, y: u32, footprint: f32) -> f32 {
         let (u, v) = self.to_local(x as f32 + 0.5, y as f32 + 0.5);
-        let du = u.min(self.w - u);
-        let dv = v.min(self.h - v);
-        (0.5 + du / footprint).clamp(0.0, 1.0) * (0.5 + dv / footprint).clamp(0.0, 1.0)
+        match self.shape {
+            Shape::Rect => {
+                let du = u.min(self.w - u);
+                let dv = v.min(self.h - v);
+                (0.5 + du / footprint).clamp(0.0, 1.0) * (0.5 + dv / footprint).clamp(0.0, 1.0)
+            }
+            Shape::Pill => (0.5 - self.pill_distance(u, v) / footprint).clamp(0.0, 1.0),
+        }
     }
 
     fn footprint(&self) -> f32 {
@@ -343,7 +408,7 @@ fn pixelate(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u
     for y in y0..y1 {
         for x in x0..x1 {
             let (u, v) = r.to_local(x as f32 + 0.5, y as f32 + 0.5);
-            if u >= 0.0 && v >= 0.0 && u < r.w && v < r.h {
+            if r.inside_local(u, v) {
                 let p = img.get_pixel(x, y).0;
                 let s = &mut sums[block_index(u, v)];
                 for ch in 0..3 {
@@ -804,6 +869,44 @@ mod tests {
             "no temp files left behind"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pill_rounds_the_corners_only() {
+        let mut img = RgbaImage::from_pixel(200, 100, Rgba([255, 255, 255, 255]));
+        let mut r = Region::from_points(
+            (20.0, 20.0),
+            (180.0, 80.0),
+            200,
+            100,
+            Style::Fill(FillColor::Black),
+            8,
+        )
+        .unwrap();
+        r.shape = Shape::Pill;
+        apply(&mut img, &[r]);
+        let px = |x, y| img.get_pixel(x, y).0[0];
+        assert_eq!(px(100, 50), 0, "center");
+        assert_eq!(px(100, 21), 0, "straight top side, like a rectangle");
+        assert_eq!(px(25, 50), 0, "middle of the rounded end");
+        assert_eq!(px(21, 21), 255, "corner outside the rounded end");
+        assert_eq!(px(178, 78), 255, "other corner");
+        // Antialiased: some pixels on the curve are in between.
+        assert!((20..50).any(|x| (20..50).any(|y| (1..255).contains(&px(x, y)))));
+    }
+
+    #[test]
+    fn pill_outline_is_closed_and_inside_bounds() {
+        let mut r = Region::from_points((0.0, 0.0), (100.0, 40.0), 200, 100, Style::Pixelate, 8)
+            .unwrap()
+            .rotated_to(0.5);
+        r.shape = Shape::Pill;
+        let (x0, y0, x1, y1) = r.bounds();
+        let outline = r.outline();
+        assert!(outline.len() > 4);
+        for (x, y) in outline {
+            assert!(x >= x0 - 0.01 && x <= x1 + 0.01 && y >= y0 - 0.01 && y <= y1 + 0.01);
+        }
     }
 
     #[test]

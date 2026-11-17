@@ -1,0 +1,12 @@
+# Tilted lab report: patient identifiers covered with pills that follow the tilt.
+doc lab-report.png
+clear
+box @patient pill
+box @dob pill
+box @mrn pill
+box @address pill
+box @phone pill
+box @signer pill
+box @specimen pill
+select 2
+shot 03-pills

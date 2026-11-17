@@ -1,0 +1,6 @@
+# Save size menu open over the chat screenshot.
+doc chat-screenshot.png
+select none
+size 1920
+menu size
+shot 05-size

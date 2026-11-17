@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- Fictional document for App Store screenshots. Every name, company, amount
+     and number in it is made up. Rendered at 816×1056 CSS px (US Letter), 3×. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #fff; }
+  .page {
+    width: 816px; height: 1056px; box-sizing: border-box;
+    padding: 72px 84px; position: relative;
+    font: 15.5px/1.62 ui-serif, "New York", Georgia, serif; color: #1d1f24;
+  }
+  .head { display: flex; align-items: center; justify-content: space-between;
+          border-bottom: 2px solid #1d1f24; padding-bottom: 18px; }
+  .brand { font: 700 22px/1 system-ui; letter-spacing: 0.32em; }
+  .brand small { display: block; font: 500 11px/1.6 system-ui; letter-spacing: 0.18em;
+                 color: #6b7180; margin-top: 6px; }
+  .stamp { font: 800 15px/1 system-ui; letter-spacing: 0.22em; color: #c4302b;
+           border: 2.5px solid #c4302b; border-radius: 6px; padding: 9px 14px 8px;
+           transform: rotate(-4deg); }
+  .meta { display: grid; grid-template-columns: 84px 1fr; row-gap: 6px; margin: 28px 0 26px;
+          font: 14.5px/1.5 system-ui; }
+  .meta b { color: #6b7180; font-weight: 600; letter-spacing: 0.06em; font-size: 12px;
+            text-transform: uppercase; padding-top: 2px; }
+  h1 { font: 650 24px/1.3 system-ui; margin: 0 0 14px; letter-spacing: -0.01em; }
+  p { margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 22px; font: 14px/1.4 system-ui; }
+  th { text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: 0.08em;
+       text-transform: uppercase; color: #6b7180; border-bottom: 1.5px solid #1d1f24; padding: 8px 6px; }
+  td { padding: 9px 6px; border-bottom: 1px solid #e3e5ea; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sign { margin-top: 26px; font: 14.5px/1.5 system-ui; }
+  .sig { font: italic 30px/1 "Snell Roundhand", "Apple Chancery", cursive; color: #22305e;
+         margin: 4px 0 6px; display: inline-block; }
+  .foot { position: absolute; left: 84px; right: 84px; bottom: 44px; display: flex;
+          justify-content: space-between; font: 11px/1 system-ui; color: #8a90a0;
+          letter-spacing: 0.06em; }
+  #boxes { display: none; }
+  [data-r] { white-space: nowrap; }
+</style>
+</head>
+<body data-dpr="3">
+<div class="page">
+  <div class="head">
+    <div class="brand">ORBITLINE<small>SYSTEMS · INTERNAL MEMORANDUM</small></div>
+    <div class="stamp">CONFIDENTIAL</div>
+  </div>
+
+  <div class="meta">
+    <b>To</b><div><span data-r="to">Dana Whitfield</span>, Chief Financial Officer</div>
+    <b>From</b><div><span data-r="from">Marcus Ellery</span>, VP Corporate Development</div>
+    <b>Date</b><div>March 14, 2026</div>
+    <b>Re</b><div>Project Halcyon: proposed acquisition terms</div>
+  </div>
+
+  <h1>Project Halcyon</h1>
+  <p>Following last week's board session, we have agreed in principle to acquire
+    <span data-r="target1">Brightwater Analytics</span> for <span data-r="price">$48.5 million</span>
+    in cash and stock, subject to diligence and final approval on April 2.</p>
+  <p>Until the announcement, only the deal team below should know the target's name.
+    Please refer to it as Halcyon in all email, calendar invites and documents, including
+    anything shared with outside counsel.</p>
+  <p>To keep the <span data-r="target2">Brightwater</span> engineering leads through the
+    transition, we propose the following retention packages, vesting over 24 months:</p>
+
+  <table>
+    <tr><th>Name</th><th>Role</th><th class="num">Retention</th></tr>
+    <tr><td><span data-r="n1">Priya Natarajan</span></td><td>Head of Data Platform</td><td class="num"><span data-r="a1">$420,000</span></td></tr>
+    <tr><td><span data-r="n2">Tomás Ferreira</span></td><td>Principal Engineer</td><td class="num"><span data-r="a2">$310,000</span></td></tr>
+    <tr><td><span data-r="n3">Hannah Okafor</span></td><td>Director of Research</td><td class="num"><span data-r="a3">$285,000</span></td></tr>
+    <tr><td><span data-r="n4">Lucas Brennan</span></td><td>Staff Engineer</td><td class="num"><span data-r="a4">$190,000</span></td></tr>
+  </table>
+
+  <p>Escrow will be held at First Meridian, account ending <span data-r="acct">4417-0093</span>.
+    Wire instructions will follow by phone only.</p>
+
+  <div class="sign">
+    <div class="sig" data-r="sig" data-pad="6">Marcus Ellery</div><br>
+    Marcus Ellery · VP Corporate Development
+  </div>
+
+  <div class="foot"><span>ORBITLINE SYSTEMS · DO NOT FORWARD</span><span>PAGE 1 OF 3</span></div>
+</div>
+<pre id="boxes"></pre>
+<script src="boxes.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# Chat screenshot: contact, address, codes and email pixelated.
+doc chat-screenshot.png
+clear
+box @avatar pixelate pill block=22
+box @name pixelate block=22
+box @handle pixelate block=22
+box @address pixelate block=22
+box @gate pixelate block=22
+box @phone pixelate block=22
+box @wifi pixelate block=22
+box @email pixelate block=22
+select 3
+shot 02-pixelate
