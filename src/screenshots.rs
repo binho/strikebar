@@ -11,12 +11,15 @@
 //! doc memo.png                      # show the open image with this file name
 //! clear                             # remove its boxes
 //! box 820 610 300 46                # centre x, y and width, height in image pixels
-//! box 820 700 300 46 pixelate block=40
+//! box 820 700 300 46 pixelate block=40   # or `blur`
 //! box 820 790 300 46 fill=white pill angle=-3
 //! select 1                          # 0-based box index, or `none`
 //! size 1920                         # save size preset (`original` for none)
-//! menu size                         # open the save size menu
+//! menu size                         # open the save size menu (or `menu settings [saving]`,
+//!                                   # `menu default-size`: Settings → Saving → Default size)
 //! save                              # save a copy of the shown image (or `save-all`)
+//! window 900 700                    # window size in points for this and later shots
+//! theme light                       # `light`, `dark` or `auto` (default: dark)
 //! shot 01-memo                      # file name of the screenshot
 //! ```
 //!
@@ -29,6 +32,7 @@ use eframe::egui;
 use image::RgbaImage;
 
 use crate::redact::{FillColor, SaveSize, Shape, Style};
+use crate::theme::Appearance;
 
 pub const ENV: &str = "STRIKEBAR_SCREENSHOTS";
 
@@ -57,13 +61,22 @@ pub enum Command {
     Select(Option<usize>),
     Size(SaveSize),
     OpenSizeMenu,
+    OpenDefaultSizeMenu,
+    /// Open Settings, on the Saving tab if `true`.
+    OpenSettings(bool),
     Save,
     SaveAll,
+    /// Window size for screenshots, handled by [`Capture`] itself.
+    Window(f32, f32),
+    /// Light or dark, handled by [`Capture`] itself.
+    Theme(Appearance),
 }
 
 pub struct Capture {
     dir: PathBuf,
     count: usize,
+    /// Window size in points for the next screenshots.
+    size: egui::Vec2,
     /// Requested screenshot and when it may be taken.
     pending: Option<(String, Instant)>,
 }
@@ -75,6 +88,7 @@ impl Capture {
         Some(Self {
             dir,
             count: 0,
+            size: egui::vec2(WINDOW_SIZE[0], WINDOW_SIZE[1]),
             pending: None,
         })
     }
@@ -94,6 +108,17 @@ impl Capture {
                 eprintln!("scene: {e}");
             }
             commands = parsed.commands;
+            commands.retain(|c| match c {
+                Command::Window(w, h) => {
+                    self.size = egui::vec2(*w, *h);
+                    false
+                }
+                Command::Theme(a) => {
+                    a.set(ctx);
+                    false
+                }
+                _ => true,
+            });
             let name = name.unwrap_or_else(|| format!("shot-{}", self.count));
             self.pending = Some((name.replace(['/', '\\'], "-"), Instant::now() + SETTLE));
         }
@@ -101,7 +126,7 @@ impl Capture {
         // Only capture at the exact size (the App Store needs it). The window
         // stays freely resizable otherwise; it's put back just for the shot.
         if let Some((name, ready_at)) = &self.pending {
-            let target = egui::vec2(WINDOW_SIZE[0], WINDOW_SIZE[1]);
+            let target = self.size;
             let (size, maximized) = ctx.input(|i| {
                 let v = i.viewport();
                 (v.inner_rect.map(|r| r.size()), v.maximized == Some(true))
@@ -209,6 +234,11 @@ fn parse_line(cmd: &str, args: &[&str]) -> Result<Option<Command>, String> {
         ("save", []) => Command::Save,
         ("save-all", []) => Command::SaveAll,
         ("menu", ["size"]) => Command::OpenSizeMenu,
+        ("menu", ["settings"]) => Command::OpenSettings(false),
+        ("menu", ["settings", "saving"]) => Command::OpenSettings(true),
+        ("menu", ["default-size"]) => Command::OpenDefaultSizeMenu,
+        ("window", [w, h]) => Command::Window(num(w)?, num(h)?),
+        ("theme", [t]) => Command::Theme(Appearance::from_key(t).ok_or("light, dark or auto")?),
         ("select", ["none"]) => Command::Select(None),
         ("select", [n]) => Command::Select(Some(n.parse().map_err(|_| "bad index")?)),
         ("size", ["original"]) => Command::Size(SaveSize::Original),
@@ -221,6 +251,7 @@ fn parse_line(cmd: &str, args: &[&str]) -> Result<Option<Command>, String> {
             for opt in opts {
                 match opt.split_once('=') {
                     None if *opt == "pixelate" => style = Style::Pixelate,
+                    None if *opt == "blur" => style = Style::Blur,
                     None if *opt == "fill" => style = Style::Fill(FillColor::Black),
                     None if *opt == "pill" => shape = Shape::Pill,
                     None if *opt == "rect" => shape = Shape::Rect,
@@ -293,6 +324,19 @@ mod tests {
         let (p, name) = parse("01-editor\n");
         assert!(p.commands.is_empty());
         assert_eq!(name.as_deref(), Some("01-editor"));
+    }
+
+    #[test]
+    fn parses_window_size() {
+        let (p, _) = parse("window 900 700\nshot narrow\n");
+        assert_eq!(p.commands, vec![Command::Window(900.0, 700.0)]);
+    }
+
+    #[test]
+    fn parses_theme() {
+        let (p, _) = parse("theme light\ntheme sepia\nshot light\n");
+        assert_eq!(p.commands, vec![Command::Theme(Appearance::Light)]);
+        assert_eq!(p.errors.len(), 1);
     }
 
     #[test]

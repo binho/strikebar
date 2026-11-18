@@ -11,9 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Rgba, RgbaImage};
+use serde::{Deserialize, Serialize};
 
 /// Solid colors for [`Style::Fill`]. All fully opaque, so any of them hides what's under it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FillColor {
     Black,
     White,
@@ -56,17 +57,21 @@ impl FillColor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Style {
     /// Solid color. Safe for any content.
     Fill(FillColor),
     /// Large blocks with random noise added, so it can't be undone by
     /// re-pixelating guesses and comparing.
     Pixelate,
+    /// Looks like a blur, but is built from the same noisy blocks as
+    /// [`Style::Pixelate`], smoothed into each other. The saved pixels hold only
+    /// those block colors, so it can't be sharpened back like a real blur.
+    Blur,
 }
 
 /// Outline of a box.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Shape {
     #[default]
     Rect,
@@ -87,9 +92,10 @@ pub struct Region {
     pub angle: f32,
     pub shape: Shape,
     pub style: Style,
-    /// Block size for [`Style::Pixelate`], in image pixels. Blocks follow the rotation.
+    /// Block size for [`Style::Pixelate`] and [`Style::Blur`], in image pixels.
+    /// Blocks follow the rotation.
     pub block: u32,
-    /// Random seed for the pixelate noise, picked when the region is created so the
+    /// Random seed for the block noise, picked when the region is created so the
     /// preview and the export match but the noise can't be predicted.
     pub seed: u64,
 }
@@ -359,7 +365,8 @@ pub fn apply(img: &mut RgbaImage, regions: &[Region]) {
         };
         match r.style {
             Style::Fill(color) => fill(img, r, bounds, color.rgb()),
-            Style::Pixelate => pixelate(img, r, bounds),
+            Style::Pixelate => blocks(img, r, bounds, false),
+            Style::Blur => blocks(img, r, bounds, true),
         }
     }
 }
@@ -393,7 +400,11 @@ fn fill(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u32),
 /// Averages each block (in the box's own, possibly rotated, frame) over the image
 /// pixels whose center is inside the box, adds per-block noise, and writes it back,
 /// blending the partly covered edge pixels.
-fn pixelate(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u32)) {
+///
+/// With `smooth` (Blur), each pixel is a smooth mix of the nearby blocks instead
+/// of its own block's color. Either way the output depends only on the noisy
+/// block averages, so nothing finer survives.
+fn blocks(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u32), smooth: bool) {
     let block = r.block.max(MIN_BLOCK) as f32;
     let cols = (r.w / block).ceil().max(1.0) as usize;
     let rows = (r.h / block).ceil().max(1.0) as usize;
@@ -428,11 +439,15 @@ fn pixelate(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u
             // Noise depends only on the seed and the block, so it's stable while
             // other boxes change and when re-rendering just part of the image.
             let mut rng = SplitMix64(r.seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut noise =
+                || (rng.next() % (2 * NOISE_AMPLITUDE as u64 + 1)) as i32 - NOISE_AMPLITUDE;
+            // Blur shifts only the brightness of a block (one value for all
+            // channels): per-channel noise reads as colored confetti once smoothed.
+            let shared = smooth.then(&mut noise);
             let mut out = [0u8; 3];
             for ch in 0..3 {
-                let noise =
-                    (rng.next() % (2 * NOISE_AMPLITUDE as u64 + 1)) as i32 - NOISE_AMPLITUDE;
-                out[ch] = ((s[ch] / s[3]) as i32 + noise).clamp(0, 255) as u8;
+                let n = shared.unwrap_or_else(&mut noise);
+                out[ch] = ((s[ch] / s[3]) as i32 + n).clamp(0, 255) as u8;
             }
             Some(out)
         })
@@ -445,7 +460,12 @@ fn pixelate(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u
                 continue;
             }
             let (u, v) = r.to_local(x as f32 + 0.5, y as f32 + 0.5);
-            let Some(rgb) = colors[block_index(u, v)] else {
+            let color = if smooth {
+                smooth_color(&colors, cols, rows, u / block - 0.5, v / block - 0.5)
+            } else {
+                colors[block_index(u, v)]
+            };
+            let Some(rgb) = color else {
                 continue;
             };
             let px = if c >= 1.0 {
@@ -456,6 +476,53 @@ fn pixelate(img: &mut RgbaImage, r: &Region, (x0, y0, x1, y1): (u32, u32, u32, u
             img.put_pixel(x, y, Rgba(px));
         }
     }
+}
+
+/// Color at a point measured in blocks from the first block's center: the 4×4
+/// surrounding block colors mixed with cubic B-spline weights. Unlike bilinear
+/// or smoothstep between the nearest four, this has no creases or flat spots at
+/// the block centers, so no grid shows; it looks like a Gaussian blur. Blocks
+/// outside the image are skipped.
+fn smooth_color(
+    colors: &[Option<[u8; 3]>],
+    cols: usize,
+    rows: usize,
+    fx: f32,
+    fy: f32,
+) -> Option<[u8; 3]> {
+    // Indices (clamped to the grid) and weights of the four blocks along one axis.
+    let axis = |f: f32, n: usize| {
+        let i = f.floor();
+        let t = f - i;
+        let (t2, t3) = (t * t, t * t * t);
+        let w = [
+            (1.0 - t).powi(3) / 6.0,
+            (3.0 * t3 - 6.0 * t2 + 4.0) / 6.0,
+            (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0) / 6.0,
+            t3 / 6.0,
+        ];
+        let idx = |k: i32| (i as i32 + k).clamp(0, n as i32 - 1) as usize;
+        [
+            (idx(-1), w[0]),
+            (idx(0), w[1]),
+            (idx(1), w[2]),
+            (idx(2), w[3]),
+        ]
+    };
+    let mut sum = [0.0f32; 3];
+    let mut total = 0.0;
+    for (row, wy) in axis(fy, rows) {
+        for (col, wx) in axis(fx, cols) {
+            if let Some(c) = colors[row * cols + col] {
+                let w = wx * wy;
+                for ch in 0..3 {
+                    sum[ch] += c[ch] as f32 * w;
+                }
+                total += w;
+            }
+        }
+    }
+    (total > 0.0).then(|| sum.map(|s| (s / total).round() as u8))
 }
 
 /// File extensions the app can open, for the file dialog.
@@ -505,7 +572,7 @@ pub fn load(path: &Path) -> Result<RgbaImage, String> {
 
 /// Size of saved images. Resizing happens after redacting, and downscaling
 /// only averages pixels together, so redacted areas stay redacted.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum SaveSize {
     #[default]
     Original,
@@ -571,11 +638,18 @@ impl SaveSize {
     }
 }
 
-/// Encodes `img` to `path`, picking the format from the extension.
+/// JPEG quality when nothing else is chosen: visually lossless for photos and
+/// screenshots, about a third of the size of quality 100.
+pub const DEFAULT_JPEG_QUALITY: u8 = 92;
+/// Lowest JPEG quality offered. Below this, text in screenshots gets blotchy.
+pub const MIN_JPEG_QUALITY: u8 = 50;
+
+/// Encodes `img` to `path`, picking the format from the extension. JPEGs use
+/// `jpeg_quality` (1–100); the other formats are lossless.
 /// Only pixels are written: no EXIF, GPS or embedded thumbnails.
 /// Writes to a temporary file first and renames it, so a failed save never
 /// leaves a half-written file behind (matters when overwriting the original).
-pub fn save(img: &RgbaImage, path: &Path) -> Result<(), String> {
+pub fn save(img: &RgbaImage, path: &Path, jpeg_quality: u8) -> Result<(), String> {
     let format = ImageFormat::from_path(path)
         .ok()
         .filter(|f| writable(*f))
@@ -589,7 +663,7 @@ pub fn save(img: &RgbaImage, path: &Path) -> Result<(), String> {
         let mut w = BufWriter::new(file);
         if format == ImageFormat::Jpeg {
             let rgb = DynamicImage::ImageRgba8(img.clone()).into_rgb8();
-            JpegEncoder::new_with_quality(&mut w, 92)
+            JpegEncoder::new_with_quality(&mut w, jpeg_quality.clamp(1, 100))
                 .encode_image(&rgb)
                 .map_err(|e| e.to_string())?;
         } else {
@@ -604,23 +678,78 @@ pub fn save(img: &RgbaImage, path: &Path) -> Result<(), String> {
     result
 }
 
-/// `photo.jpg` → `photo-redacted.jpg`, then `photo-redacted-2.jpg`, … if taken.
+/// Where redacted copies go and what they're called.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CopyNaming {
+    /// Folder for copies. `None`: next to the original.
+    pub folder: Option<PathBuf>,
+    /// Added to the original name, like `-redacted`.
+    pub affix: String,
+    /// Put the affix before the name (`redacted-photo.jpg`) instead of after it.
+    pub prefix: bool,
+}
+
+impl Default for CopyNaming {
+    fn default() -> Self {
+        Self {
+            folder: None,
+            affix: "-redacted".into(),
+            prefix: false,
+        }
+    }
+}
+
+impl CopyNaming {
+    /// The affix without characters that aren't allowed in file names.
+    fn clean_affix(&self) -> String {
+        self.affix
+            .chars()
+            .filter(|c| !c.is_control() && !r#"/\:*?"<>|"#.contains(*c))
+            .collect()
+    }
+
+    /// File name of the copy, before checking whether it's taken.
+    pub fn file_name(&self, original: &Path) -> String {
+        let stem = original
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image");
+        let affix = self.clean_affix();
+        let ext = copy_extension(original);
+        if self.prefix {
+            format!("{affix}{stem}.{ext}")
+        } else {
+            format!("{stem}{affix}.{ext}")
+        }
+    }
+}
+
 /// Formats we can't write (HEIC, GIF) get a `.jpg` copy.
-pub fn copy_path(original: &Path) -> PathBuf {
-    let stem = original
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("image");
-    let ext = original
+fn copy_extension(original: &Path) -> &str {
+    original
         .extension()
         .and_then(|e| e.to_str())
         .filter(|e| ImageFormat::from_extension(e).is_some_and(writable))
-        .unwrap_or("jpg");
-    let dir = original.parent().unwrap_or(Path::new("."));
-    let mut candidate = dir.join(format!("{stem}-redacted.{ext}"));
+        .unwrap_or("jpg")
+}
+
+/// `photo.jpg` → `photo-redacted.jpg`, then `photo-redacted-2.jpg`, … if taken,
+/// in `naming.folder` or next to the original. Never the original itself, even
+/// with an empty affix in the same folder.
+pub fn copy_path(original: &Path, naming: &CopyNaming) -> PathBuf {
+    let dir = naming
+        .folder
+        .as_deref()
+        .unwrap_or_else(|| original.parent().unwrap_or(Path::new(".")));
+    let name = naming.file_name(original);
+    let mut candidate = dir.join(&name);
     let mut n = 2;
-    while candidate.exists() {
-        candidate = dir.join(format!("{stem}-redacted-{n}.{ext}"));
+    while candidate.exists() || candidate == original {
+        let path = Path::new(&name);
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+        candidate = dir.join(format!("{stem}-{n}.{ext}"));
         n += 1;
     }
     candidate
@@ -745,6 +874,47 @@ mod tests {
     }
 
     #[test]
+    fn blur_and_pixelate_keep_nothing_finer_than_a_block() {
+        // A 1 px checkerboard of 0/254 and flat 127 have the same block averages,
+        // so with the same region (same noise) they must come out identical.
+        let checker = RgbaImage::from_fn(64, 64, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0 } else { 254 };
+            Rgba([v, v, v, 255])
+        });
+        let flat = RgbaImage::from_pixel(64, 64, Rgba([127, 127, 127, 255]));
+        for style in [Style::Pixelate, Style::Blur] {
+            let r = Region::from_points((0.0, 0.0), (64.0, 64.0), 64, 64, style, 16).unwrap();
+            let (mut a, mut b) = (checker.clone(), flat.clone());
+            apply(&mut a, &[r]);
+            apply(&mut b, &[r]);
+            assert_eq!(a, b, "{style:?}");
+        }
+    }
+
+    #[test]
+    fn blur_is_smooth_and_stays_inside() {
+        let orig = gradient(96, 96);
+        let mut img = orig.clone();
+        let r = Region::from_points((0.0, 0.0), (64.0, 64.0), 96, 96, Style::Blur, 16).unwrap();
+        apply(&mut img, &[r]);
+        let mut max_step = 0;
+        for y in 0..64 {
+            for x in 1..64 {
+                let (a, b) = (img.get_pixel(x - 1, y).0, img.get_pixel(x, y).0);
+                for ch in 0..3 {
+                    max_step = max_step.max((a[ch] as i32 - b[ch] as i32).abs());
+                }
+            }
+        }
+        // Neighboring blocks can differ by up to 255; the B-spline spreads that
+        // over 16 px and more. Pixelate jumps the whole way at once.
+        assert!(max_step <= 25, "step {max_step}");
+        assert_ne!(img.get_pixel(20, 20), orig.get_pixel(20, 20));
+        assert_ne!(img.get_pixel(20, 20), img.get_pixel(28, 20)); // not flat per block
+        assert_eq!(img.get_pixel(80, 80), orig.get_pixel(80, 80));
+    }
+
+    #[test]
     fn local_and_image_coordinates_round_trip() {
         let r = Region::from_points((10.0, 20.0), (70.0, 50.0), 100, 100, BLACK, 16)
             .unwrap()
@@ -798,12 +968,23 @@ mod tests {
         let img = gradient(40, 30);
         for ext in ["png", "jpg"] {
             let p = dir.join(format!("out.{ext}"));
-            save(&img, &p).unwrap();
+            save(&img, &p, DEFAULT_JPEG_QUALITY).unwrap();
             let back = load(&p).unwrap();
             assert_eq!(back.dimensions(), (40, 30));
         }
-        let copy = copy_path(&dir.join("out.png"));
+        let naming = CopyNaming::default();
+        let copy = copy_path(&dir.join("out.png"), &naming);
         assert_eq!(copy.file_name().unwrap(), "out-redacted.png");
+        // Taken names get a number; an empty affix never targets the original.
+        save(&img, &copy, DEFAULT_JPEG_QUALITY).unwrap();
+        let next = copy_path(&dir.join("out.png"), &naming);
+        assert_eq!(next.file_name().unwrap(), "out-redacted-2.png");
+        let bare = CopyNaming {
+            affix: String::new(),
+            ..CopyNaming::default()
+        };
+        let copy = copy_path(&dir.join("out.png"), &bare);
+        assert_eq!(copy.file_name().unwrap(), "out-2.png");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -841,15 +1022,53 @@ mod tests {
     }
 
     #[test]
+    fn copy_names_follow_the_settings() {
+        let original = Path::new("/photos/IMG_0001.jpg");
+        let naming = CopyNaming {
+            folder: Some(PathBuf::from("/nowhere/out")),
+            affix: "redacted_/:".into(),
+            prefix: true,
+        };
+        assert_eq!(
+            copy_path(original, &naming),
+            Path::new("/nowhere/out/redacted_IMG_0001.jpg")
+        );
+        let suffix = CopyNaming {
+            affix: " (safe)".into(),
+            ..CopyNaming::default()
+        };
+        assert_eq!(
+            copy_path(original, &suffix),
+            Path::new("/photos/IMG_0001 (safe).jpg")
+        );
+    }
+
+    #[test]
+    fn jpeg_quality_changes_the_file_size() {
+        let dir = std::env::temp_dir().join(format!("strikebar-test-{}", random_seed()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = gradient(200, 150);
+        let size = |q: u8| {
+            let p = dir.join(format!("q{q}.jpg"));
+            save(&img, &p, q).unwrap();
+            std::fs::metadata(&p).unwrap().len()
+        };
+        assert!(size(MIN_JPEG_QUALITY) < size(100));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn unwritable_formats_get_jpeg_copies_and_no_overwrite() {
         let heic = Path::new("/nowhere/IMG_0001.HEIC");
         assert_eq!(
-            copy_path(heic).file_name().unwrap(),
+            copy_path(heic, &CopyNaming::default()).file_name().unwrap(),
             "IMG_0001-redacted.jpg"
         );
         assert!(!can_overwrite(heic));
         assert_eq!(
-            copy_path(Path::new("/nowhere/a.gif")).file_name().unwrap(),
+            copy_path(Path::new("/nowhere/a.gif"), &CopyNaming::default())
+                .file_name()
+                .unwrap(),
             "a-redacted.jpg"
         );
         assert!(!can_overwrite(Path::new("/nowhere/a.gif")));
@@ -862,8 +1081,8 @@ mod tests {
         let img = gradient(4, 4);
         let dir = std::env::temp_dir().join(format!("strikebar-test-{}", random_seed()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(save(&img, &dir.join("x.heic")).is_err());
-        assert!(save(&img, &dir.join("x.gif")).is_err());
+        assert!(save(&img, &dir.join("x.heic"), DEFAULT_JPEG_QUALITY).is_err());
+        assert!(save(&img, &dir.join("x.gif"), DEFAULT_JPEG_QUALITY).is_err());
         assert!(
             std::fs::read_dir(&dir).unwrap().next().is_none(),
             "no temp files left behind"
@@ -948,7 +1167,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("strikebar-test-{}", random_seed()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("small.jpg");
-        save(&SaveSize::LongSide(320).apply(gradient(1280, 960)), &path).unwrap();
+        save(
+            &SaveSize::LongSide(320).apply(gradient(1280, 960)),
+            &path,
+            DEFAULT_JPEG_QUALITY,
+        )
+        .unwrap();
         assert_eq!(load(&path).unwrap().dimensions(), (320, 240));
         std::fs::remove_dir_all(&dir).unwrap();
     }

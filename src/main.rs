@@ -2,16 +2,22 @@
 
 mod app;
 mod loader;
+#[cfg(target_os = "macos")]
+mod menu;
 mod redact;
 mod screenshots;
+mod settings;
+mod system;
 mod theme;
+mod update;
 
-const APP_NAME: &str = "Strikebar";
+pub const APP_NAME: &str = "Strikebar";
 
 fn main() -> eframe::Result {
+    let capture = std::env::var_os(screenshots::ENV).is_some();
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(APP_NAME)
-        .with_inner_size(if std::env::var_os(screenshots::ENV).is_some() {
+        .with_inner_size(if capture {
             screenshots::WINDOW_SIZE
         } else {
             [1280.0, 820.0]
@@ -31,6 +37,9 @@ fn main() -> eframe::Result {
     }
     let options = eframe::NativeOptions {
         viewport,
+        // Settings and the window's size and position are kept between runs,
+        // except in screenshot mode, which needs the exact size every time.
+        persist_window: !capture,
         ..Default::default()
     };
     let paths: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(Into::into).collect();

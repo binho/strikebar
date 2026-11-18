@@ -42,13 +42,16 @@ The bundle is self-contained (runs without Homebrew):
 
 - **Open**: ⌘O / Open…, drag files onto the window, or pass paths on the command line.
 - **Draw**: drag on empty space to add a box. The new box is selected.
-- **Edit a box**: click it to select (outline + handles). Drag inside to move, drag a handle to resize, drag the ○ above it to rotate (Shift snaps to 15°) or type an angle in the toolbar. Pick Fill/Pixelate, a color or the block size to restyle it. Esc deselects.
+- **Edit a box**: click it to select (outline + handles). Drag inside to move, drag a handle to resize, drag the ○ above it to rotate (Shift snaps to 15°) or type an angle in the toolbar. Pick Fill/Pixelate/Blur, a color or the block size to restyle it. Esc deselects.
 - **Delete**: acts on what you clicked last. On the canvas it removes the selected box (right-click also removes a box); in the sidebar it removes the selected image from the list (the file on disk is untouched). ⌘Z undoes the last box.
-- **Style**: `F` fill with a solid color (black, white, gray, red, yellow or blue; all opaque, safe for anything) or `P` pixelate (large blocks plus random noise; blocks follow the box's rotation). Block size scales with the image (default 1/80 of its long side: ~100 px on a 48 MP photo, 20 px on a 1600 px screenshot), never below 1/200 of it.
-- **Shape**: rectangle or pill (fully rounded ends), from the two buttons next to Fill/Pixelate. Like the style, it applies to new boxes and to the selected one. Rotation works with both; pill corners are left uncovered, so make the box big enough for what it hides.
+- **Style**: `F` fill with a solid color (black, white, gray, red, yellow or blue; all opaque, safe for anything) `P` pixelate (large blocks plus random noise; blocks follow the box's rotation) or `B` blur (the same noisy blocks, smoothed into each other so it looks like a blur). Block size, which is also the blur strength, scales with the image (default 1/80 of its long side: ~100 px on a 48 MP photo, 20 px on a 1600 px screenshot), never below 1/200 of it.
+- **Shape**: rectangle or pill (fully rounded ends), from the two buttons next to Fill/Pixelate/Blur. Like the style, it applies to new boxes and to the selected one. Rotation works with both; pill corners are left uncovered, so make the box big enough for what it hides.
 - **Navigate**: two-finger scroll, middle-drag or Space+drag to pan; pinch, ⌘/Ctrl+scroll or ⌘+ / ⌘− to zoom; `0` or ⌘0 fit, `1` 100%; ↑/↓ switch images.
 - **Formats**: PNG, JPEG, WebP, BMP, TIFF, GIF and HEIC/HEIF (read only). HEIC and GIF can't be written back, so their copies are saved as `name-redacted.jpg` and *Overwrite* is disabled for them.
-- **Save**: *Save copy* (⌘S) writes `name-redacted.ext` next to the original; *Save all copies* does it for every image with boxes; *Overwrite original…* replaces the file after confirming.
+- **Save**: *Save copy* (⌘S) writes `name-redacted.ext` next to the original (or as set in Settings); *Save all* does it for every image with boxes; *Overwrite original…* replaces the file after confirming.
+- **Settings**: Strikebar → Settings… (⌘,) on macOS; the gear at the right of the title bar (Ctrl+,) on Windows and Linux. Kept between runs, along with the window's size and position.
+  - *General*: appearance (Auto follows the system's light or dark mode and switches with it, or always Light or Dark); whether new boxes start with the last style, color and shape (on) or a black rectangle; the default Pixelate/Blur strength (Light, Medium or Strong: 1/120, 1/80 or 1/50 of the image's long side); and an update check against the latest GitHub release (off unless turned on; once a day, or *Check now*). It runs `curl`, so no network code is built in.
+  - *Saving*: copies go next to the original or into a folder you pick; the name gets a suffix or prefix (`-redacted` by default; taken names are numbered, so a copy never replaces anything); JPEG quality (50–100, default 92, also used for HEIC and GIF copies); the save size at launch; and what happens after saving (stay, show the file in Finder/Explorer, or go to the next image).
 - **Size**: the picker next to the save buttons scales saved images down to a long side of 3840, 2560, 1920, 1280 or 800 px (default: original size). It applies to every save, overwrite included, and never enlarges smaller images; hover it to see the resulting size. Scaling happens after redacting, so redacted areas stay redacted.
 
 ## Notes on safety
@@ -58,13 +61,16 @@ The bundle is self-contained (runs without Homebrew):
 - Images decode on background threads (up to 4), and only the image on screen keeps a full-size GPU texture; edits re-render just the changed area.
 - Saved files contain only pixels: EXIF, GPS and embedded thumbnails are dropped. EXIF orientation is applied on load so photos stay upright.
 - The preview is rendered with the same code as the export, so what you see is what is saved.
-- Blur is intentionally not offered: blurred text can often be recovered. Pixelate adds per-block random noise so it can't be reversed by guessing and comparing.
+- There is no real (Gaussian) blur: blurred text can often be recovered. *Blur* only looks like one: it's pixelate with the blocks smoothed into each other, so the saved pixels hold nothing but the noisy block averages. Pixelate and Blur add per-block random noise so they can't be reversed by guessing and comparing.
 
 ## Layout
 
 - `src/redact.rs` — UI-free core: regions in image coordinates, apply black/pixelate, load, save, copy naming. Unit tested (`cargo test`).
 - `src/app.rs` — egui UI: title bar, image list, editor toolbar, canvas with zoom/pan/selection, status bar.
-- `src/theme.rs` — Zed-like look: One Dark colors, spacing, Lucide icons (`lucide-icons` crate), system UI font (SF Pro / Segoe UI when available).
+- `src/settings.rs` — the settings and their defaults, stored with eframe's persistence.
+- `src/update.rs` — the update check (`curl` + GitHub's latest-release JSON); `src/system.rs` opens links and reveals files.
+- `src/menu.rs` — macOS menu bar (the standard app menu plus Settings…), via `muda`.
+- `src/theme.rs` — Zed-like look: One Dark and One Light colors, spacing, Lucide icons (`lucide-icons` crate), system UI font (SF Pro / Segoe UI when available).
 
 ## Screenshots
 

@@ -10,10 +10,22 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use crate::loader::{LoadResult, Loader};
 use crate::redact::{self, FillColor, Region, SaveSize, Shape, Style};
 use crate::screenshots::{Capture, Command};
+use crate::settings::{self, AfterSave, Settings, Strength, Tools};
 use crate::theme::{self, Icon};
+use crate::{system, update};
 
 const MIN_ZOOM: f32 = 0.02;
 const MAX_ZOOM: f32 = 32.0;
+/// Toolbar widths (points) needed for, in order of what goes first when the
+/// window narrows: the "editing the selected box" note, the shape buttons'
+/// text, the style buttons' text, then the zoom in/out buttons and the block
+/// size readout. The angle field (only shown for a selected box) needs another
+/// [`TOOLBAR_ANGLE_WIDTH`].
+const TOOLBAR_NOTE_WIDTH: f32 = 950.0;
+const TOOLBAR_SHAPE_LABELS_WIDTH: f32 = 730.0;
+const TOOLBAR_STYLE_LABELS_WIDTH: f32 = 640.0;
+const TOOLBAR_ZOOM_WIDTH: f32 = 500.0;
+const TOOLBAR_ANGLE_WIDTH: f32 = 60.0;
 const ZOOM_STEP: f32 = 1.25;
 /// Half the side of a resize handle, and how close (in screen points) the pointer must be to grab one.
 const HANDLE_RADIUS: f32 = 4.0;
@@ -374,7 +386,7 @@ impl Doc {
 /// Re-renders just the `dirty` part of the preview: the original pixels there with
 /// the shown regions burned in. Returns where the patch goes and its pixels.
 ///
-/// Pixelate depends on the whole region (block grid, noise sequence), so the patch
+/// Pixelate and blur depend on the whole region (block grid, noise sequence), so the patch
 /// grows until every region touching it is fully inside; the result is then exactly
 /// what a full re-render would give for that area.
 fn render_patch(
@@ -441,7 +453,7 @@ fn draw_outline(painter: &egui::Painter, outline: &[Pos2]) {
     ));
     painter.add(egui::Shape::closed_line(
         outline.to_vec(),
-        Stroke::new(1.5, theme::ACCENT),
+        Stroke::new(1.5, theme::accent()),
     ));
 }
 
@@ -452,20 +464,20 @@ fn draw_selection(painter: &egui::Painter, doc: &Doc, canvas: Rect, r: &Region, 
         return;
     }
     let (top, knob) = doc.rotate_handle(canvas, r);
-    painter.line_segment([top, knob], Stroke::new(1.5, theme::ACCENT));
+    painter.line_segment([top, knob], Stroke::new(1.5, theme::accent()));
     painter.circle(
         knob,
         HANDLE_RADIUS + 1.0,
-        theme::TEXT,
-        Stroke::new(1.5, theme::ACCENT),
+        theme::text(),
+        Stroke::new(1.5, theme::accent()),
     );
     for h in Handle::ALL {
         let at = doc.local_to_screen(canvas, r, h.local(r));
         painter.rect(
             Rect::from_center_size(at, Vec2::splat(HANDLE_RADIUS * 2.0)),
             1.5,
-            theme::TEXT,
-            Stroke::new(1.0, theme::ACCENT),
+            theme::text(),
+            Stroke::new(1.0, theme::accent()),
             StrokeKind::Outside,
         );
     }
@@ -478,7 +490,7 @@ fn style_color(style: Style, alpha: u8) -> Color32 {
             let [r, g, b] = c.rgb();
             Color32::from_rgba_unmultiplied(r, g, b, alpha)
         }
-        Style::Pixelate => Color32::from_rgba_unmultiplied(110, 115, 125, alpha),
+        Style::Pixelate | Style::Blur => Color32::from_rgba_unmultiplied(110, 115, 125, alpha),
     }
 }
 
@@ -515,7 +527,7 @@ fn rect_outline(r: Rect, shape: Shape) -> Vec<Pos2> {
 fn unsaved_dot(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
     ui.painter()
-        .circle_filled(rect.center(), 3.0, theme::ACCENT);
+        .circle_filled(rect.center(), 3.0, theme::accent());
     response
 }
 
@@ -529,21 +541,21 @@ fn color_swatch(ui: &mut egui::Ui, color: FillColor, selected: bool) -> egui::Re
     painter.rect_stroke(
         inner,
         3.0,
-        Stroke::new(1.0, theme::BORDER),
+        Stroke::new(1.0, theme::border()),
         StrokeKind::Outside,
     );
     if selected {
         painter.rect_stroke(
             rect,
             4.0,
-            Stroke::new(1.5, theme::ACCENT),
+            Stroke::new(1.5, theme::accent()),
             StrokeKind::Inside,
         );
     } else if response.hovered() {
         painter.rect_stroke(
             rect,
             4.0,
-            Stroke::new(1.0, theme::TEXT_MUTED),
+            Stroke::new(1.0, theme::text_muted()),
             StrokeKind::Inside,
         );
     }
@@ -560,7 +572,7 @@ fn pending_row(ui: &mut egui::Ui, p: &Pending) {
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
     let row = row.shrink2(vec2(6.0, 0.0));
     let slot = Rect::from_min_size(row.min + vec2(6.0, 5.0), vec2(52.0, 36.0));
-    ui.painter().rect_filled(slot, 2.0, theme::HOVER);
+    ui.painter().rect_filled(slot, 2.0, theme::hover());
     ui.new_child(
         egui::UiBuilder::new().max_rect(Rect::from_center_size(slot.center(), vec2(16.0, 16.0))),
     )
@@ -576,7 +588,7 @@ fn pending_row(ui: &mut egui::Ui, p: &Pending) {
     );
     text_ui.spacing_mut().item_spacing.y = 1.0;
     text_ui.add(
-        egui::Label::new(RichText::new(&p.name).color(theme::TEXT_MUTED))
+        egui::Label::new(RichText::new(&p.name).color(theme::text_muted()))
             .truncate()
             .selectable(false),
     );
@@ -584,7 +596,7 @@ fn pending_row(ui: &mut egui::Ui, p: &Pending) {
         egui::Label::new(
             RichText::new("Loading…")
                 .size(11.5)
-                .color(theme::TEXT_PLACEHOLDER),
+                .color(theme::text_placeholder()),
         )
         .selectable(false),
     );
@@ -592,7 +604,7 @@ fn pending_row(ui: &mut egui::Ui, p: &Pending) {
 
 /// Shortcut list shown from the status bar.
 fn shortcuts_help(ui: &mut egui::Ui) {
-    ui.label(RichText::new("Shortcuts").strong().color(theme::TEXT));
+    ui.label(RichText::new("Shortcuts").strong().color(theme::text()));
     ui.add_space(4.0);
     egui::Grid::new("shortcuts")
         .num_columns(2)
@@ -617,9 +629,9 @@ fn shortcuts_help(ui: &mut egui::Ui) {
                 ui.label(
                     RichText::new(keys)
                         .font(egui::FontId::monospace(12.0))
-                        .color(theme::TEXT_MUTED),
+                        .color(theme::text_muted()),
                 );
-                ui.label(RichText::new(what).color(theme::TEXT));
+                ui.label(RichText::new(what).color(theme::text()));
                 ui.end_row();
             }
         });
@@ -644,7 +656,7 @@ pub struct StrikebarApp {
     shape: Shape,
     /// Width of the editor toolbar's tools last frame, so the breadcrumb to their
     /// left can be truncated instead of running into them.
-    toolbar_tools_width: f32,
+    title_controls_width: f32,
     /// Size saved images are scaled down to (all saves, overwrite included).
     save_size: SaveSize,
     drag: Option<DragOp>,
@@ -664,6 +676,86 @@ pub struct StrikebarApp {
     capture: Option<Capture>,
     /// A screenshot scene asked for the save size menu to be open.
     open_size_menu: bool,
+    /// Same, for Settings → Saving → Default size.
+    open_default_size_menu: bool,
+    settings: Settings,
+    settings_open: bool,
+    settings_tab: SettingsTab,
+    updates: update::Checker,
+    #[cfg(target_os = "macos")]
+    menu: Option<crate::menu::MenuBar>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    General,
+    Saving,
+}
+
+/// Settings from eframe's storage. Before there were more settings, only the
+/// appearance was stored, under its own key.
+fn load_settings(storage: &dyn eframe::Storage) -> Settings {
+    eframe::get_value(storage, settings::KEY).unwrap_or_else(|| Settings {
+        appearance: storage
+            .get_string("appearance")
+            .and_then(|k| theme::Appearance::from_key(&k))
+            .unwrap_or_default(),
+        ..Settings::default()
+    })
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A save size menu item: its label plus a dimmer hint ("Full HD", "web", …).
+fn size_option(ui: &egui::Ui, size: SaveSize) -> egui::text::LayoutJob {
+    let mut text = egui::text::LayoutJob::default();
+    for (part, color) in [
+        (size.label(), theme::text()),
+        (format!("  {}", size.hint()), theme::text_placeholder()),
+    ] {
+        RichText::new(part).color(color).append_to(
+            &mut text,
+            ui.style(),
+            egui::FontSelection::Default,
+            egui::Align::Center,
+        );
+    }
+    text
+}
+
+/// One setting: its name on the left, level with the first line of the
+/// controls on the right. (egui's Grid centers each cell in its row instead.)
+fn setting_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    const LABEL_WIDTH: f32 = 112.0;
+    ui.horizontal_top(|ui| {
+        let size = vec2(LABEL_WIDTH, ui.spacing().interact_size.y + 2.0);
+        ui.allocate_ui_with_layout(
+            size,
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_size(size);
+                ui.label(RichText::new(label).color(theme::text_muted()));
+            },
+        );
+        ui.vertical(add);
+    });
+    ui.add_space(14.0);
+}
+
+/// Dim explanation under a setting.
+fn setting_hint(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.add(
+        egui::Label::new(
+            RichText::new(text.into())
+                .small()
+                .color(theme::text_placeholder()),
+        )
+        .wrap(),
+    );
 }
 
 impl StrikebarApp {
@@ -671,15 +763,36 @@ impl StrikebarApp {
         // ⌘+ / ⌘− / ⌘0 zoom the image, not the whole UI.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         theme::apply(&cc.egui_ctx);
+        let capture = Capture::from_env();
+        // Screenshots always start from the defaults, dark unless a scene says otherwise.
+        let mut settings = if capture.is_some() {
+            Settings {
+                appearance: theme::Appearance::Dark,
+                ..Settings::default()
+            }
+        } else {
+            cc.storage.map(load_settings).unwrap_or_default()
+        };
+        settings.appearance.set(&cc.egui_ctx);
+        let tools = settings.start_tools();
+        let mut updates = update::Checker::new();
+        let now = unix_now();
+        if settings.check_updates
+            && capture.is_none()
+            && now.saturating_sub(settings.last_update_check) >= update::INTERVAL_SECS
+        {
+            settings.last_update_check = now;
+            updates.start(&cc.egui_ctx);
+        }
         let mut app = Self {
             docs: Vec::new(),
             current: None,
-            style: Style::Fill(FillColor::Black),
-            block_fraction: redact::DEFAULT_BLOCK_FRACTION,
-            fill_color: FillColor::Black,
-            shape: Shape::Rect,
-            toolbar_tools_width: 0.0,
-            save_size: SaveSize::Original,
+            style: tools.style,
+            block_fraction: settings.strength.fraction(),
+            fill_color: tools.fill_color,
+            shape: tools.shape,
+            title_controls_width: 0.0,
+            save_size: settings.save_size,
             drag: None,
             focus: Focus::Sidebar,
             status: "Open or drop images to start.".into(),
@@ -691,8 +804,15 @@ impl StrikebarApp {
             batch_done: 0,
             batch_errors: Vec::new(),
             batch_started: std::time::Instant::now(),
-            capture: Capture::from_env(),
+            capture,
             open_size_menu: false,
+            open_default_size_menu: false,
+            settings,
+            settings_open: false,
+            settings_tab: SettingsTab::General,
+            updates,
+            #[cfg(target_os = "macos")]
+            menu: crate::menu::MenuBar::install(&cc.egui_ctx, crate::APP_NAME),
         };
         app.open_paths(&cc.egui_ctx, paths);
         app
@@ -935,11 +1055,25 @@ impl StrikebarApp {
                 }
                 Command::Size(size) => self.save_size = size,
                 Command::OpenSizeMenu => self.open_size_menu = true,
+                Command::OpenDefaultSizeMenu => {
+                    self.settings_open = true;
+                    self.settings_tab = SettingsTab::Saving;
+                    self.open_default_size_menu = true;
+                }
                 Command::Save => {
                     if let Some(i) = self.current {
                         self.save_copy(i);
                     }
                 }
+                Command::OpenSettings(saving) => {
+                    self.settings_open = true;
+                    self.settings_tab = if saving {
+                        SettingsTab::Saving
+                    } else {
+                        SettingsTab::General
+                    };
+                }
+                Command::Window(..) | Command::Theme(_) => {} // handled by Capture
                 Command::SaveAll => self.save_all_copies(),
             }
         }
@@ -993,17 +1127,46 @@ impl StrikebarApp {
         }
     }
 
-    fn save_copy(&mut self, idx: usize) {
+    /// Writes the redacted copy of image `idx`, as named in the settings.
+    fn write_copy(&mut self, idx: usize) -> Option<PathBuf> {
+        let naming = self.settings.naming.clone();
+        if let Some(dir) = naming.folder.as_deref().filter(|d| !d.is_dir()) {
+            self.status = format!(
+                "Couldn't save: the folder {} is missing. Pick another in Settings.",
+                dir.display()
+            );
+            return None;
+        }
         let out = self.output(idx);
         let note = self.resized_note(&out, idx);
         let doc = &mut self.docs[idx];
-        let target = redact::copy_path(&doc.path);
-        match redact::save(&out, &target) {
+        let target = redact::copy_path(&doc.path, &naming);
+        match redact::save(&out, &target, self.settings.jpeg_quality) {
             Ok(()) => {
                 doc.unsaved = false;
                 self.status = format!("Saved {}{note}", file_name(&target));
+                Some(target)
             }
-            Err(e) => self.status = format!("Couldn't save {}: {e}", target.display()),
+            Err(e) => {
+                self.status = format!("Couldn't save {}: {e}", target.display());
+                None
+            }
+        }
+    }
+
+    /// Saves a copy of image `idx`, then does what Settings → After saving says.
+    fn save_copy(&mut self, idx: usize) {
+        let Some(path) = self.write_copy(idx) else {
+            return;
+        };
+        match self.settings.after_save {
+            AfterSave::Nothing => {}
+            AfterSave::Reveal => system::reveal(&path),
+            AfterSave::NextImage => {
+                if idx + 1 < self.docs.len() {
+                    self.select(idx + 1);
+                }
+            }
         }
     }
 
@@ -1015,15 +1178,33 @@ impl StrikebarApp {
             self.status = "Nothing to save: no image has redactions.".into();
             return;
         }
+        let mut saved = Vec::new();
+        let mut failed = None;
         for &i in &todo {
-            self.save_copy(i);
+            match self.write_copy(i) {
+                Some(path) => saved.push(path),
+                None => failed = failed.or(Some(self.status.clone())),
+            }
         }
-        if !self.status.starts_with("Couldn't") {
-            self.status = format!(
-                "Saved {} redacted copies next to the originals.",
-                todo.len()
-            );
+        if let Some(first_error) = failed {
+            self.status = first_error;
+            return;
         }
+        let place = match &self.settings.naming.folder {
+            Some(dir) => format!("to {}", file_name(dir)),
+            None => "next to the originals".into(),
+        };
+        self.status = format!("Saved {} redacted copies {place}.", saved.len());
+        if self.settings.after_save == AfterSave::Reveal
+            && let Some(last) = saved.last()
+        {
+            system::reveal(last);
+        }
+    }
+
+    fn start_update_check(&mut self, ctx: &egui::Context) {
+        self.settings.last_update_check = unix_now();
+        self.updates.start(ctx);
     }
 
     fn overwrite(&mut self, idx: usize) {
@@ -1058,7 +1239,7 @@ impl StrikebarApp {
         let rendered = self.output(idx);
         let note = self.resized_note(&rendered, idx);
         let doc = &mut self.docs[idx];
-        match redact::save(&rendered, &doc.path) {
+        match redact::save(&rendered, &doc.path, self.settings.jpeg_quality) {
             Ok(()) => {
                 // The redactions are now part of the pixels.
                 doc.original = rendered;
@@ -1129,7 +1310,19 @@ impl StrikebarApp {
         let ctx = ui.ctx().clone();
         let typing = ctx.egui_wants_keyboard_input();
         let key = |i: &mut egui::InputState, m: Modifiers, k: Key| !typing && i.consume_key(m, k);
-        let mut pressed = [false; 13];
+        // On macOS the menu bar takes ⌘, (Strikebar → Settings…).
+        #[cfg(target_os = "macos")]
+        if self.menu.as_ref().is_some_and(|m| m.settings_chosen()) {
+            self.settings_open = true;
+        }
+        #[cfg(not(target_os = "macos"))]
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Comma)) {
+            self.settings_open = !self.settings_open;
+        }
+        if self.settings_open {
+            return; // the dialog handles its own keys (Esc closes it)
+        }
+        let mut pressed = [false; 14];
         ui.input_mut(|i| {
             pressed = [
                 i.consume_key(Modifiers::COMMAND, Key::O),
@@ -1137,6 +1330,7 @@ impl StrikebarApp {
                 i.consume_key(Modifiers::COMMAND, Key::S),
                 key(i, Modifiers::NONE, Key::F),
                 key(i, Modifiers::NONE, Key::P),
+                key(i, Modifiers::NONE, Key::B),
                 key(i, Modifiers::NONE, Key::Num0) | key(i, Modifiers::COMMAND, Key::Num0),
                 key(i, Modifiers::NONE, Key::Num1),
                 key(i, Modifiers::COMMAND, Key::Plus) | key(i, Modifiers::COMMAND, Key::Equals),
@@ -1153,6 +1347,7 @@ impl StrikebarApp {
             save,
             fill,
             pixelate,
+            blur,
             fit,
             actual,
             zoom_in,
@@ -1177,6 +1372,9 @@ impl StrikebarApp {
         }
         if pixelate {
             self.set_style(Style::Pixelate, None);
+        }
+        if blur {
+            self.set_style(Style::Blur, None);
         }
         let view = if fit {
             Some(ViewRequest::Fit)
@@ -1232,6 +1430,318 @@ impl StrikebarApp {
         }
     }
 
+    /// Settings dialog: Strikebar → Settings… (⌘,) on macOS, the gear in the
+    /// title bar (Ctrl+,) elsewhere.
+    fn settings(&mut self, ctx: &egui::Context) {
+        let frame = egui::Frame::popup(&ctx.global_style())
+            .fill(theme::panel())
+            .inner_margin(Margin::same(16));
+        let modal = egui::Modal::new(egui::Id::new("settings"))
+            .frame(frame)
+            .show(ctx, |ui| {
+                // Labels here are names and hints, not content worth copying.
+                ui.style_mut().interaction.selectable_labels = false;
+                ui.set_width(470.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Settings").heading().color(theme::text()));
+                    ui.add_space(12.0);
+                    for (tab, icon, label) in [
+                        (SettingsTab::General, Icon::SlidersHorizontal, "General"),
+                        (SettingsTab::Saving, Icon::Save, "Saving"),
+                    ] {
+                        let text = RichText::new(theme::icon_text(icon, label));
+                        ui.selectable_value(&mut self.settings_tab, tab, text);
+                    }
+                });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(8.0);
+                // Scrolls only when the window is too short for it.
+                let max_height = (ui.ctx().content_rect().height() - 170.0).max(140.0);
+                egui::ScrollArea::vertical()
+                    .max_height(max_height)
+                    .show(ui, |ui| match self.settings_tab {
+                        SettingsTab::General => self.general_settings(ui),
+                        SettingsTab::Saving => self.saving_settings(ui),
+                    });
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(8.0);
+                // A row of its own: a bare right-to-left layout would take all the
+                // height left and stretch the dialog.
+                let done = ui
+                    .allocate_ui_with_layout(
+                        vec2(ui.available_width(), 28.0),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let button =
+                                theme::primary_button(RichText::new("Done").color(theme::text()))
+                                    .min_size(vec2(84.0, 28.0));
+                            theme::tooltip(ui.add(button), "Close Settings", Some("↩")).clicked()
+                        },
+                    )
+                    .inner;
+                // Return closes it too, like a dialog's default button, unless
+                // it's confirming text in the file name field.
+                let enter = !ui.ctx().egui_wants_keyboard_input()
+                    && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                done || enter
+            });
+        if modal.inner || modal.should_close() {
+            self.settings_open = false;
+        }
+    }
+
+    fn general_settings(&mut self, ui: &mut egui::Ui) {
+        {
+            setting_row(ui, "Appearance", |ui| {
+                ui.horizontal(|ui| {
+                    for a in theme::Appearance::ALL {
+                        let text = RichText::new(theme::icon_text(a.icon(), a.label()));
+                        let on = self.settings.appearance == a;
+                        if ui.add(egui::Button::selectable(on, text)).clicked() && !on {
+                            self.settings.appearance = a;
+                            a.set(ui.ctx());
+                        }
+                    }
+                });
+                setting_hint(
+                    ui,
+                    match self.settings.appearance {
+                        theme::Appearance::Auto => "Follows the system's light or dark mode.",
+                        theme::Appearance::Light => "Always light.",
+                        theme::Appearance::Dark => "Always dark.",
+                    },
+                );
+            });
+
+            setting_row(ui, "New boxes", |ui| {
+                ui.checkbox(
+                    &mut self.settings.remember_tools,
+                    "Start with the last style, color and shape",
+                );
+                setting_hint(
+                    ui,
+                    if self.settings.remember_tools {
+                        "Picked up where you left off when Strikebar starts."
+                    } else {
+                        "Strikebar always starts with a black rectangle."
+                    },
+                );
+            });
+
+            setting_row(ui, "Strength", |ui| {
+                ui.horizontal(|ui| {
+                    for st in Strength::ALL {
+                        let on = self.settings.strength == st;
+                        if ui.add(egui::Button::selectable(on, st.label())).clicked() {
+                            self.settings.strength = st;
+                            self.block_fraction = st.fraction();
+                        }
+                    }
+                });
+                setting_hint(
+                    ui,
+                    "Block size of new Pixelate and Blur boxes. The toolbar slider still \
+                         changes it box by box.",
+                );
+            });
+
+            setting_row(ui, "Updates", |ui| {
+                if ui
+                    .checkbox(&mut self.settings.check_updates, "Check once a day")
+                    .changed()
+                    && self.settings.check_updates
+                {
+                    self.start_update_check(ui.ctx());
+                }
+                ui.horizontal(|ui| {
+                    let checking = self.updates.status == update::Status::Checking;
+                    if ui
+                        .add_enabled(!checking, egui::Button::new("Check now"))
+                        .clicked()
+                    {
+                        self.start_update_check(ui.ctx());
+                    }
+                    let small = |t: String, c| RichText::new(t).small().color(c);
+                    match &self.updates.status {
+                        update::Status::Idle => {}
+                        update::Status::Checking => {
+                            ui.spinner();
+                        }
+                        update::Status::UpToDate => {
+                            ui.label(small(
+                                format!(
+                                    "{} {} is the latest version.",
+                                    crate::APP_NAME,
+                                    env!("CARGO_PKG_VERSION")
+                                ),
+                                theme::text_muted(),
+                            ));
+                        }
+                        update::Status::Available { version, url } => {
+                            if ui
+                                .link(theme::icon_text(
+                                    Icon::Download,
+                                    &format!("Download {version}"),
+                                ))
+                                .clicked()
+                            {
+                                system::open_url(url);
+                            }
+                        }
+                        update::Status::Failed(e) => {
+                            ui.add(
+                                egui::Label::new(small(
+                                    format!("Couldn't check: {e}"),
+                                    theme::warning(),
+                                ))
+                                .truncate(),
+                            );
+                        }
+                    }
+                });
+                setting_hint(
+                    ui,
+                    "Asks GitHub for the latest release. Nothing about you or your images \
+                         is sent.",
+                );
+            });
+        }
+    }
+
+    fn saving_settings(&mut self, ui: &mut egui::Ui) {
+        let pick_folder = || {
+            FileDialog::new()
+                .set_title("Folder for redacted copies")
+                .pick_folder()
+        };
+        {
+            setting_row(ui, "Save copies", |ui| {
+                let naming = &mut self.settings.naming;
+                if ui
+                    .radio(naming.folder.is_none(), "Next to the original")
+                    .clicked()
+                {
+                    naming.folder = None;
+                }
+                ui.horizontal(|ui| {
+                    if ui.radio(naming.folder.is_some(), "In a folder").clicked()
+                        && naming.folder.is_none()
+                    {
+                        naming.folder = pick_folder();
+                    }
+                    if let Some(dir) = naming.folder.clone() {
+                        if ui.button("Change…").clicked()
+                            && let Some(new) = pick_folder()
+                        {
+                            naming.folder = Some(new);
+                        }
+                        let missing = !dir.is_dir();
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(theme::icon_text(Icon::Folder, &file_name(&dir)))
+                                    .color(if missing {
+                                        theme::warning()
+                                    } else {
+                                        theme::text_muted()
+                                    }),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(if missing {
+                            format!("{} (missing)", dir.display())
+                        } else {
+                            dir.display().to_string()
+                        });
+                    }
+                });
+            });
+
+            setting_row(ui, "File name", |ui| {
+                let naming = &mut self.settings.naming;
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut naming.affix)
+                            .desired_width(120.0)
+                            .hint_text("nothing"),
+                    );
+                    egui::ComboBox::from_id_salt("affix_position")
+                        .selected_text(if naming.prefix {
+                            "before the name"
+                        } else {
+                            "after the name"
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut naming.prefix, false, "after the name");
+                            ui.selectable_value(&mut naming.prefix, true, "before the name");
+                        });
+                });
+                let example = std::path::Path::new("photo.jpg");
+                let name = naming.file_name(example);
+                setting_hint(
+                    ui,
+                    if name == "photo.jpg" && naming.folder.is_none() {
+                        "photo.jpg → photo-2.jpg (numbered, so the original is never \
+                             replaced)"
+                            .to_owned()
+                    } else {
+                        format!("photo.jpg → {name}, numbered if taken")
+                    },
+                );
+            });
+
+            setting_row(ui, "JPEG quality", |ui| {
+                ui.spacing_mut().slider_width = 200.0;
+                ui.add(egui::Slider::new(
+                    &mut self.settings.jpeg_quality,
+                    redact::MIN_JPEG_QUALITY..=100,
+                ));
+                setting_hint(
+                    ui,
+                    "Lower makes smaller files. HEIC and GIF copies are saved as JPEG too.",
+                );
+            });
+
+            setting_row(ui, "Default size", |ui| {
+                let before = self.settings.save_size;
+                let response = egui::ComboBox::from_id_salt("default_save_size")
+                    .selected_text(theme::icon_text(
+                        Icon::Scaling,
+                        &self.settings.save_size.label(),
+                    ))
+                    .show_ui(ui, |ui| {
+                        for size in SaveSize::ALL {
+                            let text = size_option(ui, size);
+                            ui.selectable_value(&mut self.settings.save_size, size, text);
+                        }
+                    })
+                    .response;
+                if std::mem::take(&mut self.open_default_size_menu) {
+                    egui::Popup::open_id(ui.ctx(), response.id.with("popup"));
+                }
+                if self.settings.save_size != before {
+                    self.save_size = self.settings.save_size;
+                }
+                setting_hint(
+                    ui,
+                    "Picked when Strikebar starts. The size menu next to Save copy changes \
+                         it until you quit.",
+                );
+            });
+
+            setting_row(ui, "After saving", |ui| {
+                egui::ComboBox::from_id_salt("after_save")
+                    .selected_text(self.settings.after_save.label())
+                    .show_ui(ui, |ui| {
+                        for a in AfterSave::ALL {
+                            ui.selectable_value(&mut self.settings.after_save, a, a.label());
+                        }
+                    });
+            });
+        }
+    }
+
     /// Custom title bar (macOS draws the traffic lights on top of it). Drag to move
     /// the window, double-click to zoom it, like a native one.
     fn title_bar(&mut self, ui: &mut egui::Ui) {
@@ -1253,7 +1763,7 @@ impl StrikebarApp {
         let save_hint = current_path
             .as_deref()
             .and_then(|p| {
-                redact::copy_path(p)
+                redact::copy_path(p, &self.settings.naming)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
             })
@@ -1263,22 +1773,57 @@ impl StrikebarApp {
         let controls = ui
             .horizontal_centered(|ui| {
                 ui.add_space(theme::TRAFFIC_LIGHTS_WIDTH);
-                ui.label(RichText::new("Strikebar").color(theme::TEXT));
-                if let Some(doc) = self.current.map(|i| &self.docs[i]) {
-                    ui.label(RichText::new("/").color(theme::TEXT_PLACEHOLDER));
-                    ui.label(RichText::new(&doc.name).color(theme::TEXT_MUTED));
+                // App / folder / file, truncated to the space the buttons leave
+                // (they're laid out after it, so use last frame's width).
+                let title_width =
+                    (ui.available_width() - self.title_controls_width - 16.0).max(0.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(title_width);
+                    ui.label(RichText::new("Strikebar").color(theme::text()));
+                    let Some(doc) = self.current.map(|i| &self.docs[i]) else {
+                        return;
+                    };
+                    let slash = || RichText::new("/").color(theme::text_placeholder());
+                    if let Some(dir) = doc.path.parent().and_then(|p| p.file_name()) {
+                        ui.label(slash());
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(dir.to_string_lossy())
+                                    .color(theme::text_placeholder()),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(
+                            doc.path.parent().unwrap_or(&doc.path).display().to_string(),
+                        );
+                    }
+                    ui.label(slash());
+                    ui.add(
+                        egui::Label::new(RichText::new(&doc.name).color(theme::text_muted()))
+                            .truncate(),
+                    );
                     if doc.unsaved {
                         unsaved_dot(ui).on_hover_text("Unsaved redactions");
                     }
-                }
+                });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(6.0);
-                    let primary = egui::Button::new(
-                        RichText::new(theme::icon_text(Icon::Save, "Save copy")).color(theme::TEXT),
-                    )
-                    .fill(theme::ACCENT.gamma_multiply(0.22))
-                    .stroke(Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.45)));
+                    // macOS has Settings… in the app menu instead.
+                    if cfg!(target_os = "macos") {
+                        ui.add_space(6.0);
+                    } else {
+                        ui.add_space(2.0);
+                        if theme::icon_button(ui, Icon::Settings, true, "Settings", Some("Ctrl+,"))
+                            .clicked()
+                        {
+                            self.settings_open = true;
+                        }
+                        ui.add_space(2.0);
+                    }
+                    let primary = theme::primary_button(
+                        RichText::new(theme::icon_text(Icon::Save, "Save copy"))
+                            .color(theme::text()),
+                    );
                     save = theme::tooltip(
                         ui.add_enabled(has_regions, primary),
                         &save_hint,
@@ -1314,6 +1859,10 @@ impl StrikebarApp {
                 .rect
             })
             .inner;
+        if (controls.width() - self.title_controls_width).abs() > 0.5 {
+            self.title_controls_width = controls.width();
+            ctx.request_repaint(); // lay the title out again with the new width
+        }
 
         // Buttons only sense clicks, so egui hands a drag that starts on them to
         // the bar underneath. Without this check a slightly shaky click on a
@@ -1351,20 +1900,7 @@ impl StrikebarApp {
             .selected_text(theme::icon_text(Icon::Scaling, &self.save_size.label()))
             .show_ui(ui, |ui| {
                 for size in SaveSize::ALL {
-                    // Label plus a dimmer hint ("Full HD", "web", …).
-                    let mut text = egui::text::LayoutJob::default();
-                    for (part, color) in [
-                        (size.label(), theme::TEXT),
-                        (format!("  {}", size.hint()), theme::TEXT_PLACEHOLDER),
-                    ] {
-                        RichText::new(part).color(color).append_to(
-                            &mut text,
-                            ui.style(),
-                            egui::FontSelection::Default,
-                            egui::Align::Center,
-                        );
-                    }
-                    ui.selectable_value(&mut self.save_size, size, text);
+                    ui.selectable_value(&mut self.save_size, size, size_option(ui, size));
                 }
             })
             .response;
@@ -1385,7 +1921,9 @@ impl StrikebarApp {
         theme::tooltip(response, &hint, None);
     }
 
-    /// Breadcrumb on the left, tools on the right (like Zed's editor toolbar).
+    /// Editing tools in one row, left to right in the order you use them (style,
+    /// its color or strength, shape, angle, undo), and zoom on the right. The
+    /// file's folder and name are in the title bar.
     fn editor_toolbar(&mut self, ui: &mut egui::Ui) {
         let has_doc = self.current.is_some();
         let has_regions = self
@@ -1405,182 +1943,181 @@ impl StrikebarApp {
         let mut block = block_info.map_or(0, |(px, _)| px);
         let mut view = None;
         let (mut undo, mut clear) = (false, false);
+        // Narrow windows drop the least needed parts first.
+        let width = ui.available_width()
+            - if editing_box {
+                TOOLBAR_ANGLE_WIDTH
+            } else {
+                0.0
+            };
+        let show_note = editing_box && width >= TOOLBAR_NOTE_WIDTH;
+        let shape_labels = width >= TOOLBAR_SHAPE_LABELS_WIDTH;
+        let compact = width < TOOLBAR_STYLE_LABELS_WIDTH;
+        let tiny = width < TOOLBAR_ZOOM_WIDTH;
+        let label = |icon: Icon, text: &str| {
+            if compact {
+                icon.unicode().to_string()
+            } else {
+                theme::icon_text(icon, text)
+            }
+        };
 
-        let tools_width = ui
-            .horizontal_centered(|ui| {
-                // Breadcrumb, truncated to the space the tools leave (they're laid out
-                // after it, so use last frame's width).
-                let crumb_width = (ui.available_width() - self.toolbar_tools_width - 16.0).max(0.0);
-                if let Some(doc) = self.current.map(|i| &self.docs[i]) {
-                    ui.scope(|ui| {
-                        ui.set_max_width(crumb_width);
-                        if let Some(dir) = doc
-                            .path
-                            .parent()
-                            .and_then(|p| p.file_name())
-                            .map(|d| d.to_string_lossy().into_owned())
-                        {
-                            ui.add(
-                                egui::Label::new(RichText::new(dir).color(theme::TEXT_PLACEHOLDER))
-                                    .truncate(),
-                            );
-                            ui.label(
-                                RichText::new(Icon::ChevronRight.unicode().to_string())
-                                    .color(theme::TEXT_PLACEHOLDER),
-                            );
-                        }
-                        ui.add(
-                            egui::Label::new(RichText::new(&doc.name).color(theme::TEXT))
-                                .truncate(),
-                        );
-                    });
+        ui.horizontal_centered(|ui| {
+            let fill_on = matches!(style, Style::Fill(_));
+            if theme::tooltip(
+                ui.selectable_label(fill_on, label(Icon::PaintBucket, "Fill")),
+                "Fill: solid color, safe for anything",
+                Some("F"),
+            )
+            .clicked()
+                && !fill_on
+            {
+                style = Style::Fill(fill_color);
+            }
+            theme::tooltip(
+                ui.selectable_value(
+                    &mut style,
+                    Style::Pixelate,
+                    label(Icon::Grid2x2, "Pixelate"),
+                ),
+                "Pixelate: big blocks plus random noise",
+                Some("P"),
+            );
+            theme::tooltip(
+                ui.selectable_value(&mut style, Style::Blur, label(Icon::Droplets, "Blur")),
+                "Blur: soft, built from noisy blocks, can't be sharpened back",
+                Some("B"),
+            );
+            if let Style::Fill(current) = style {
+                ui.add_space(4.0);
+                for color in FillColor::ALL {
+                    if color_swatch(ui, color, color == current).clicked() {
+                        style = Style::Fill(color);
+                    }
                 }
-
-                // Right to left: the first widget added is the rightmost.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if theme::icon_button(ui, Icon::Scan, has_doc, "Fit to window", Some("0"))
-                        .clicked()
-                    {
-                        view = Some(ViewRequest::Fit);
-                    }
-                    if theme::icon_button(ui, Icon::ZoomIn, has_doc, "Zoom in", Some("⌘+"))
-                        .clicked()
-                    {
-                        view = Some(ViewRequest::ZoomBy(ZOOM_STEP));
-                    }
-                    let pct = zoom.map_or("–".to_owned(), |z| format!("{:.0}%", z * 100.0));
-                    let pct_button = egui::Button::new(
-                        RichText::new(pct)
-                            .font(egui::FontId::monospace(12.0))
-                            .color(theme::TEXT_MUTED),
-                    )
-                    .min_size(vec2(48.0, 22.0));
-                    if theme::tooltip(
-                        ui.add_enabled(has_doc, pct_button),
-                        "Actual size",
-                        Some("1"),
-                    )
-                    .clicked()
-                    {
-                        view = Some(ViewRequest::Actual);
-                    }
-                    if theme::icon_button(ui, Icon::ZoomOut, has_doc, "Zoom out", Some("⌘−"))
-                        .clicked()
-                    {
-                        view = Some(ViewRequest::ZoomBy(1.0 / ZOOM_STEP));
-                    }
-                    theme::divider(ui);
-                    clear =
-                        theme::icon_button(ui, Icon::Eraser, has_regions, "Remove all boxes", None)
-                            .clicked();
-                    undo = theme::icon_button(
-                        ui,
-                        Icon::Undo2,
-                        has_regions,
-                        "Undo last box",
-                        Some("⌘Z"),
-                    )
-                    .clicked();
-                    theme::divider(ui);
-
-                    if let Style::Fill(current) = style {
-                        // Right to left, so add the swatches in reverse.
-                        for color in FillColor::ALL.iter().rev() {
-                            if color_swatch(ui, *color, *color == current).clicked() {
-                                style = Style::Fill(*color);
-                            }
+            } else if let Some((_, (min, max))) = block_info {
+                ui.add_space(4.0);
+                if compact {
+                    ui.spacing_mut().slider_width = 64.0;
+                }
+                theme::tooltip(
+                    ui.add(
+                        egui::Slider::new(&mut block, min..=max)
+                            .logarithmic(true)
+                            .show_value(false)
+                            .step_by(1.0),
+                    ),
+                    &format!(
+                        "{} {block}px (scales with the image's size)",
+                        if style == Style::Blur {
+                            "Blur strength"
+                        } else {
+                            "Block size"
                         }
-                    }
-                    if style == Style::Pixelate
-                        && let Some((_, (min, max))) = block_info
-                    {
-                        ui.label(
-                            RichText::new(format!("{block}px"))
-                                .font(egui::FontId::monospace(12.0))
-                                .color(theme::TEXT_MUTED),
-                        );
-                        theme::tooltip(
-                            ui.add(
-                                egui::Slider::new(&mut block, min..=max)
-                                    .logarithmic(true)
-                                    .show_value(false)
-                                    .step_by(1.0),
-                            ),
-                            "Block size (scales with the image's size)",
-                            None,
-                        );
-                    }
-                    theme::tooltip(
-                        ui.selectable_value(
-                            &mut style,
-                            Style::Pixelate,
-                            theme::icon_text(Icon::Grid2x2, "Pixelate"),
-                        ),
-                        "Big blocks plus random noise",
-                        Some("P"),
+                    ),
+                    None,
+                );
+                if !tiny {
+                    ui.label(
+                        RichText::new(format!("{block}px"))
+                            .font(egui::FontId::monospace(12.0))
+                            .color(theme::text_muted()),
                     );
-                    let fill_on = matches!(style, Style::Fill(_));
-                    if theme::tooltip(
-                        ui.selectable_label(fill_on, theme::icon_text(Icon::PaintBucket, "Fill")),
-                        "Solid color, safe for anything",
-                        Some("F"),
-                    )
-                    .clicked()
-                        && !fill_on
-                    {
-                        style = Style::Fill(fill_color);
-                    }
-                    theme::divider(ui);
-                    // Right to left: Pill ends up to the right of Rectangle.
-                    theme::tooltip(
-                        ui.selectable_value(
-                            &mut shape,
-                            Shape::Pill,
-                            Icon::Pill.unicode().to_string(),
-                        ),
-                        "Pill: rounded ends",
-                        None,
+                }
+            }
+            theme::divider(ui);
+            theme::tooltip(
+                ui.selectable_value(
+                    &mut shape,
+                    Shape::Rect,
+                    if shape_labels {
+                        theme::icon_text(Icon::RectangleHorizontal, "Rectangle")
+                    } else {
+                        Icon::RectangleHorizontal.unicode().to_string()
+                    },
+                ),
+                "Rectangle: square corners",
+                None,
+            );
+            theme::tooltip(
+                ui.selectable_value(
+                    &mut shape,
+                    Shape::Pill,
+                    if shape_labels {
+                        theme::icon_text(Icon::Pill, "Pill")
+                    } else {
+                        Icon::Pill.unicode().to_string()
+                    },
+                ),
+                "Pill: rounded ends",
+                None,
+            );
+            if let Some(deg) = angle_deg.as_mut() {
+                theme::divider(ui);
+                ui.label(
+                    RichText::new(Icon::RotateCw.unicode().to_string()).color(theme::text_muted()),
+                );
+                theme::tooltip(
+                    ui.add(
+                        egui::DragValue::new(deg)
+                            .speed(1.0)
+                            .range(-180.0..=180.0)
+                            .max_decimals(0)
+                            .suffix("°"),
+                    ),
+                    "Rotation. Or drag the ○ above the box (Shift snaps to 15°)",
+                    None,
+                );
+            }
+            theme::divider(ui);
+            undo = theme::icon_button(ui, Icon::Undo2, has_regions, "Undo last box", Some("⌘Z"))
+                .clicked();
+            clear = theme::icon_button(ui, Icon::Eraser, has_regions, "Remove all boxes", None)
+                .clicked();
+            if show_note {
+                ui.add_space(8.0);
+                ui.label(RichText::new("Editing the selected box").color(theme::accent()))
+                    .on_hover_text(
+                        "Style, shape and angle change the selected box. Esc deselects.",
                     );
-                    theme::tooltip(
-                        ui.selectable_value(
-                            &mut shape,
-                            Shape::Rect,
-                            Icon::RectangleHorizontal.unicode().to_string(),
-                        ),
-                        "Rectangle",
-                        None,
-                    );
-                    if let Some(deg) = angle_deg.as_mut() {
-                        theme::divider(ui);
-                        theme::tooltip(
-                            ui.add(
-                                egui::DragValue::new(deg)
-                                    .speed(1.0)
-                                    .range(-180.0..=180.0)
-                                    .max_decimals(0)
-                                    .suffix("°"),
-                            ),
-                            "Rotation. Or drag the ○ above the box (Shift snaps to 15°)",
-                            None,
-                        );
-                        ui.label(
-                            RichText::new(Icon::RotateCw.unicode().to_string())
-                                .color(theme::TEXT_MUTED),
-                        );
-                    }
-                    if editing_box {
-                        ui.label(RichText::new("Selected box").color(theme::ACCENT));
-                    }
-                })
-                .response
-                .rect
-                .width()
-            })
-            .inner;
-        if (tools_width - self.toolbar_tools_width).abs() > 0.5 {
-            self.toolbar_tools_width = tools_width;
-            ui.ctx().request_repaint(); // lay the breadcrumb out again with the new width
-        }
+            }
+
+            // Right to left: the first widget added is the rightmost.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::icon_button(ui, Icon::Scan, has_doc, "Fit to window", Some("0")).clicked()
+                {
+                    view = Some(ViewRequest::Fit);
+                }
+                if !tiny
+                    && theme::icon_button(ui, Icon::ZoomIn, has_doc, "Zoom in", Some("⌘+"))
+                        .clicked()
+                {
+                    view = Some(ViewRequest::ZoomBy(ZOOM_STEP));
+                }
+                let pct = zoom.map_or("–".to_owned(), |z| format!("{:.0}%", z * 100.0));
+                let pct_button = egui::Button::new(
+                    RichText::new(pct)
+                        .font(egui::FontId::monospace(12.0))
+                        .color(theme::text_muted()),
+                )
+                .min_size(vec2(48.0, 22.0));
+                if theme::tooltip(
+                    ui.add_enabled(has_doc, pct_button),
+                    "Actual size",
+                    Some("1"),
+                )
+                .clicked()
+                {
+                    view = Some(ViewRequest::Actual);
+                }
+                if !tiny
+                    && theme::icon_button(ui, Icon::ZoomOut, has_doc, "Zoom out", Some("⌘−"))
+                        .clicked()
+                {
+                    view = Some(ViewRequest::ZoomBy(1.0 / ZOOM_STEP));
+                }
+            });
+        });
 
         if shape != self.shape {
             self.set_shape(shape);
@@ -1617,9 +2154,9 @@ impl StrikebarApp {
         ui.horizontal_centered(|ui| {
             let failed = self.status.starts_with("Couldn't");
             let (icon, color) = if failed {
-                (Icon::TriangleAlert, theme::WARNING)
+                (Icon::TriangleAlert, theme::warning())
             } else {
-                (Icon::Info, theme::TEXT_PLACEHOLDER)
+                (Icon::Info, theme::text_placeholder())
             };
             ui.label(
                 RichText::new(icon.unicode().to_string())
@@ -1631,15 +2168,28 @@ impl StrikebarApp {
                 let shortcuts = ui.add(egui::Button::new(
                     RichText::new(Icon::Keyboard.unicode().to_string())
                         .size(14.0)
-                        .color(theme::TEXT_MUTED),
+                        .color(theme::text_muted()),
                 ));
                 shortcuts.on_hover_ui(shortcuts_help);
                 ui.add_space(8.0);
+                if let update::Status::Available { version, url } = &self.updates.status {
+                    let text = theme::icon_text(Icon::Download, &format!("Update to {version}"));
+                    if ui
+                        .add(egui::Button::new(
+                            RichText::new(text).size(12.0).color(theme::accent()),
+                        ))
+                        .on_hover_text("Open the download page")
+                        .clicked()
+                    {
+                        system::open_url(url);
+                    }
+                    ui.add_space(8.0);
+                }
                 if let Some(doc) = self.current.map(|i| &self.docs[i]) {
                     let small = |t: String| {
                         RichText::new(t)
                             .font(egui::FontId::monospace(11.5))
-                            .color(theme::TEXT_MUTED)
+                            .color(theme::text_muted())
                     };
                     ui.label(small(format!(
                         "{}×{}",
@@ -1654,9 +2204,9 @@ impl StrikebarApp {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add(
                         egui::Label::new(RichText::new(&self.status).size(12.0).color(if failed {
-                            theme::WARNING
+                            theme::warning()
                         } else {
-                            theme::TEXT_MUTED
+                            theme::text_muted()
                         }))
                         .truncate(),
                     );
@@ -1676,14 +2226,14 @@ impl StrikebarApp {
                 RichText::new("Images")
                     .size(12.0)
                     .strong()
-                    .color(theme::TEXT_MUTED),
+                    .color(theme::text_muted()),
             );
             let count = self.docs.len() + self.pending.len();
             if count > 0 {
                 ui.label(
                     RichText::new(count.to_string())
                         .size(12.0)
-                        .color(theme::TEXT_PLACEHOLDER),
+                        .color(theme::text_placeholder()),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1718,7 +2268,9 @@ impl StrikebarApp {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Nothing open yet.").color(theme::TEXT_PLACEHOLDER));
+                        ui.label(
+                            RichText::new("Nothing open yet.").color(theme::text_placeholder()),
+                        );
                     });
                 }
                 for (_, kind) in rows {
@@ -1736,9 +2288,9 @@ impl StrikebarApp {
                     let row = row.shrink2(vec2(6.0, 0.0));
                     let painter = ui.painter();
                     let bg = if selected {
-                        theme::SELECTED
+                        theme::selected()
                     } else if response.hovered() {
-                        theme::HOVER
+                        theme::hover()
                     } else {
                         Color32::TRANSPARENT
                     };
@@ -1747,7 +2299,7 @@ impl StrikebarApp {
                         painter.rect_stroke(
                             row,
                             4.0,
-                            Stroke::new(1.0, theme::ACCENT),
+                            Stroke::new(1.0, theme::accent()),
                             StrokeKind::Inside,
                         );
                     }
@@ -1782,7 +2334,7 @@ impl StrikebarApp {
                     painter.rect_stroke(
                         thumb,
                         2.0,
-                        Stroke::new(1.0, theme::BORDER_VARIANT),
+                        Stroke::new(1.0, theme::border_variant()),
                         StrokeKind::Outside,
                     );
 
@@ -1805,16 +2357,16 @@ impl StrikebarApp {
                     );
                     text_ui.spacing_mut().item_spacing.y = 1.0;
                     text_ui.add(
-                        egui::Label::new(RichText::new(&doc.name).color(theme::TEXT))
+                        egui::Label::new(RichText::new(&doc.name).color(theme::text()))
                             .truncate()
                             .selectable(false),
                     );
                     text_ui.add(
                         egui::Label::new(RichText::new(detail).size(11.5).color(
                             if doc.unsaved && n > 0 {
-                                theme::ACCENT
+                                theme::accent()
                             } else {
-                                theme::TEXT_PLACEHOLDER
+                                theme::text_placeholder()
                             },
                         ))
                         .truncate()
@@ -1833,7 +2385,7 @@ impl StrikebarApp {
                         let button = egui::Button::new(
                             RichText::new(Icon::X.unicode().to_string())
                                 .size(13.0)
-                                .color(theme::TEXT_MUTED),
+                                .color(theme::text_muted()),
                         );
                         let r = ui
                             .new_child(egui::UiBuilder::new().max_rect(x))
@@ -1861,7 +2413,7 @@ impl StrikebarApp {
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let canvas = response.rect;
-        painter.rect_filled(canvas, 0.0, theme::EDITOR);
+        painter.rect_filled(canvas, 0.0, theme::canvas());
 
         if self.current.is_none() && !self.pending.is_empty() {
             let c = canvas.center();
@@ -1875,7 +2427,7 @@ impl StrikebarApp {
                 egui::Align2::CENTER_CENTER,
                 format!("Loading {} images…", self.pending.len()),
                 egui::FontId::proportional(14.0),
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
             return;
         }
@@ -1886,24 +2438,24 @@ impl StrikebarApp {
                 egui::Align2::CENTER_CENTER,
                 Icon::Images.unicode(),
                 egui::FontId::proportional(40.0),
-                theme::TEXT_PLACEHOLDER.gamma_multiply(0.6),
+                theme::text_placeholder().gamma_multiply(0.6),
             );
             painter.text(
                 c,
                 egui::Align2::CENTER_CENTER,
                 "No images open",
                 egui::FontId::proportional(15.0),
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
             painter.text(
                 c + vec2(0.0, 22.0),
                 egui::Align2::CENTER_CENTER,
                 "Drop images here, or open them with ⌘O",
                 egui::FontId::proportional(13.0),
-                theme::TEXT_PLACEHOLDER,
+                theme::text_placeholder(),
             );
             let button = egui::Button::new(theme::icon_text(Icon::FolderOpen, "Open images"))
-                .fill(theme::HOVER);
+                .fill(theme::hover());
             if ui
                 .put(
                     Rect::from_center_size(c + vec2(0.0, 60.0), vec2(130.0, 26.0)),
@@ -2116,7 +2668,7 @@ impl StrikebarApp {
                     egui::Align2::LEFT_BOTTOM,
                     format!("{:.0}°", r.angle.to_degrees()),
                     egui::FontId::monospace(12.0),
-                    theme::TEXT,
+                    theme::text(),
                 );
             }
         }
@@ -2160,38 +2712,63 @@ impl StrikebarApp {
 impl eframe::App for StrikebarApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        theme::sync(&ctx);
         self.poll_loaded(&ctx);
         self.handle_shortcuts(ui);
         if let Some(capture) = &mut self.capture {
             let scene = capture.tick(&ctx);
             self.run_scene(scene);
         }
+        if let Some(update::Status::Available { version, .. }) = self.updates.poll() {
+            self.status = format!("{} {version} is available.", crate::APP_NAME);
+        }
+        if self.settings_open {
+            self.settings(&ctx);
+        }
 
         egui::Panel::top("title_bar")
             .exact_size(theme::TITLE_BAR_HEIGHT)
             .resizable(false)
-            .frame(theme::frame(theme::TITLE_BAR, Margin::ZERO))
+            .frame(theme::frame(theme::title_bar(), Margin::ZERO))
             .show(ui, |ui| self.title_bar(ui));
         egui::Panel::bottom("status_bar")
             .exact_size(theme::STATUS_BAR_HEIGHT)
             .resizable(false)
-            .frame(theme::frame(theme::TITLE_BAR, Margin::symmetric(8, 0)))
+            .frame(theme::frame(theme::title_bar(), Margin::symmetric(8, 0)))
             .show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("images")
             .resizable(true)
             .default_size(230.0)
             .min_size(170.0)
             .max_size(420.0)
-            .frame(theme::frame(theme::PANEL, Margin::ZERO))
+            .frame(theme::frame(theme::panel(), Margin::ZERO))
             .show(ui, |ui| self.sidebar(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| {
             egui::Panel::top("editor_toolbar")
                 .exact_size(theme::TOOLBAR_HEIGHT)
                 .resizable(false)
-                .frame(theme::frame(theme::EDITOR, Margin::symmetric(10, 0)))
+                .frame(theme::frame(theme::editor(), Margin::symmetric(10, 0)))
                 .show(ui, |ui| self.editor_toolbar(ui));
             self.canvas(ui);
         });
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // Scenes change the theme and tools; that's not the user's choice.
+        if self.capture.is_none() {
+            let mut settings = self.settings.clone();
+            settings.last_tools = Tools {
+                style: self.style,
+                fill_color: self.fill_color,
+                shape: self.shape,
+            };
+            eframe::set_value(storage, settings::KEY, &settings);
+        }
+    }
+
+    /// Only our own settings are kept, not egui's (panel sizes, open menus…).
+    fn persist_egui_memory(&self) -> bool {
+        false
     }
 }
 
