@@ -20,6 +20,8 @@
 //! save                              # save a copy of the shown image (or `save-all`)
 //! window 900 700                    # window size in points for this and later shots
 //! theme light                       # `light`, `dark` or `auto` (default: dark)
+//! update check                      # check for updates; `update install` installs
+//!                                   # the one found and relaunches (for testing)
 //! shot 01-memo                      # file name of the screenshot
 //! ```
 //!
@@ -68,6 +70,8 @@ pub enum Command {
     SaveAll,
     /// Window size for screenshots, handled by [`Capture`] itself.
     Window(f32, f32),
+    UpdateCheck,
+    UpdateInstall,
     /// Light or dark, handled by [`Capture`] itself.
     Theme(Appearance),
 }
@@ -237,6 +241,8 @@ fn parse_line(cmd: &str, args: &[&str]) -> Result<Option<Command>, String> {
         ("menu", ["settings"]) => Command::OpenSettings(false),
         ("menu", ["settings", "saving"]) => Command::OpenSettings(true),
         ("menu", ["default-size"]) => Command::OpenDefaultSizeMenu,
+        ("update", ["check"]) => Command::UpdateCheck,
+        ("update", ["install"]) => Command::UpdateInstall,
         ("window", [w, h]) => Command::Window(num(w)?, num(h)?),
         ("theme", [t]) => Command::Theme(Appearance::from_key(t).ok_or("light, dark or auto")?),
         ("select", ["none"]) => Command::Select(None),

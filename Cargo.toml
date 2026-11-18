@@ -2,14 +2,18 @@
 name = "strikebar"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/binho/strikebar"
 
 [dependencies]
 eframe = { version = "0.35.0", features = ["persistence"] }
 image = "0.25.10"
 libheif-rs = { version = "3.0.0", features = ["image"] }
 lucide-icons = "1.73.0"
+minisign-verify = "0.3.0"
 rfd = "0.18.0"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21.2", default-features = false }

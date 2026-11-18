@@ -1007,7 +1007,7 @@ impl StrikebarApp {
     }
 
     /// Applies screenshot scene commands (see `screenshots.rs`).
-    fn run_scene(&mut self, commands: Vec<Command>) {
+    fn run_scene(&mut self, ctx: &egui::Context, commands: Vec<Command>) {
         for command in commands {
             match command {
                 Command::Doc(name) => match self.docs.iter().position(|d| d.name == name) {
@@ -1073,6 +1073,11 @@ impl StrikebarApp {
                         SettingsTab::General
                     };
                 }
+                Command::UpdateCheck => self.updates.start(ctx),
+                Command::UpdateInstall => match self.updates.status.clone() {
+                    update::Status::Available(release) => self.install_update(ctx, release),
+                    other => eprintln!("scene: no update to install ({other:?})"),
+                },
                 Command::Window(..) | Command::Theme(_) => {} // handled by Capture
                 Command::SaveAll => self.save_all_copies(),
             }
@@ -1205,6 +1210,53 @@ impl StrikebarApp {
     fn start_update_check(&mut self, ctx: &egui::Context) {
         self.settings.last_update_check = unix_now();
         self.updates.start(ctx);
+    }
+
+    /// Installs `release`, after a warning if there are unsaved redactions
+    /// (relaunching reopens the images, not their boxes).
+    fn install_update(&mut self, ctx: &egui::Context, release: update::Release) {
+        let unsaved = self.docs.iter().filter(|d| d.unsaved).count();
+        if unsaved > 0 && self.capture.is_none() {
+            let answer = MessageDialog::new()
+                .set_level(MessageLevel::Warning)
+                .set_title("Install the update?")
+                .set_description(format!(
+                    "{unsaved} image{} {} redactions that aren't saved. Strikebar reopens \
+                     the images after updating, but not their boxes.",
+                    if unsaved == 1 { "" } else { "s" },
+                    if unsaved == 1 { "has" } else { "have" },
+                ))
+                .set_buttons(MessageButtons::OkCancelCustom(
+                    "Install and relaunch".into(),
+                    "Cancel".into(),
+                ))
+                .show();
+            let confirmed = match answer {
+                MessageDialogResult::Ok | MessageDialogResult::Yes => true,
+                MessageDialogResult::Custom(label) => label == "Install and relaunch",
+                _ => false,
+            };
+            if !confirmed {
+                return;
+            }
+        }
+        self.updates.install(ctx, release);
+    }
+
+    /// Quits into the freshly installed `app`, with the same images open.
+    fn relaunch_into(&mut self, ctx: &egui::Context, app: &std::path::Path) {
+        let files: Vec<PathBuf> = self
+            .docs
+            .iter()
+            .map(|d| d.path.clone())
+            .chain(self.pending.iter().map(|p| p.path.clone()))
+            .collect();
+        match update::relaunch(app, &files) {
+            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(e) => {
+                self.status = format!("Couldn't relaunch: {e}. Quit and open Strikebar again.")
+            }
+        }
     }
 
     fn overwrite(&mut self, idx: usize) {
@@ -1556,9 +1608,8 @@ impl StrikebarApp {
                     self.start_update_check(ui.ctx());
                 }
                 ui.horizontal(|ui| {
-                    let checking = self.updates.status == update::Status::Checking;
                     if ui
-                        .add_enabled(!checking, egui::Button::new("Check now"))
+                        .add_enabled(!self.updates.busy(), egui::Button::new("Check now"))
                         .clicked()
                     {
                         self.start_update_check(ui.ctx());
@@ -1579,28 +1630,64 @@ impl StrikebarApp {
                                 theme::text_muted(),
                             ));
                         }
-                        update::Status::Available { version, url } => {
-                            if ui
-                                .link(theme::icon_text(
-                                    Icon::Download,
-                                    &format!("Download {version}"),
-                                ))
-                                .clicked()
-                            {
-                                system::open_url(url);
-                            }
+                        update::Status::Available(r) => {
+                            ui.label(
+                                RichText::new(format!("{} {} is out.", crate::APP_NAME, r.version))
+                                    .color(theme::text()),
+                            );
+                        }
+                        update::Status::Installing(r) => {
+                            ui.spinner();
+                            ui.label(small(
+                                format!("Downloading and installing {}…", r.version),
+                                theme::text_muted(),
+                            ));
+                        }
+                        update::Status::Installed(_) => {
+                            ui.label(small("Relaunching…".into(), theme::text_muted()));
                         }
                         update::Status::Failed(e) => {
                             ui.add(
                                 egui::Label::new(small(
-                                    format!("Couldn't check: {e}"),
+                                    format!("Couldn't update: {e}"),
                                     theme::warning(),
                                 ))
-                                .truncate(),
+                                .wrap(),
                             );
                         }
                     }
                 });
+                // What a newer release offers: install it here, or get it from its page.
+                if let update::Status::Available(release) = self.updates.status.clone() {
+                    ui.horizontal(|ui| {
+                        let installable = release.download.is_some() && self.updates.target.is_ok();
+                        if installable {
+                            let install = theme::primary_button(
+                                RichText::new(theme::icon_text(
+                                    Icon::Download,
+                                    "Install and relaunch",
+                                ))
+                                .color(theme::text()),
+                            );
+                            if ui.add(install).clicked() {
+                                self.install_update(ui.ctx(), release.clone());
+                            }
+                        } else if ui
+                            .button(theme::icon_text(Icon::Download, "Download"))
+                            .clicked()
+                        {
+                            system::open_url(&release.page);
+                        }
+                        if ui.link("What's new").clicked() {
+                            system::open_url(&release.page);
+                        }
+                    });
+                    if let Err(why) = &self.updates.target
+                        && release.download.is_some()
+                    {
+                        setting_hint(ui, format!("Can't install here: {why}"));
+                    }
+                }
                 setting_hint(
                     ui,
                     "Asks GitHub for the latest release. Nothing about you or your images \
@@ -2172,16 +2259,18 @@ impl StrikebarApp {
                 ));
                 shortcuts.on_hover_ui(shortcuts_help);
                 ui.add_space(8.0);
-                if let update::Status::Available { version, url } = &self.updates.status {
-                    let text = theme::icon_text(Icon::Download, &format!("Update to {version}"));
+                if let update::Status::Available(release) = &self.updates.status {
+                    let text =
+                        theme::icon_text(Icon::Download, &format!("Update to {}", release.version));
                     if ui
                         .add(egui::Button::new(
                             RichText::new(text).size(12.0).color(theme::accent()),
                         ))
-                        .on_hover_text("Open the download page")
+                        .on_hover_text("Open Settings to install it")
                         .clicked()
                     {
-                        system::open_url(url);
+                        self.settings_open = true;
+                        self.settings_tab = SettingsTab::General;
                     }
                     ui.add_space(8.0);
                 }
@@ -2717,10 +2806,14 @@ impl eframe::App for StrikebarApp {
         self.handle_shortcuts(ui);
         if let Some(capture) = &mut self.capture {
             let scene = capture.tick(&ctx);
-            self.run_scene(scene);
+            self.run_scene(&ctx, scene);
         }
-        if let Some(update::Status::Available { version, .. }) = self.updates.poll() {
-            self.status = format!("{} {version} is available.", crate::APP_NAME);
+        match self.updates.poll().cloned() {
+            Some(update::Status::Available(r)) => {
+                self.status = format!("{} {} is available.", crate::APP_NAME, r.version);
+            }
+            Some(update::Status::Installed(app)) => self.relaunch_into(&ctx, &app),
+            _ => {}
         }
         if self.settings_open {
             self.settings(&ctx);
