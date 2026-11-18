@@ -1073,6 +1073,10 @@ impl StrikebarApp {
                         SettingsTab::General
                     };
                 }
+                Command::CloseMenus => {
+                    self.settings_open = false;
+                    egui::Popup::close_all(ctx);
+                }
                 Command::UpdateCheck => self.updates.start(ctx),
                 Command::UpdateInstall => match self.updates.status.clone() {
                     update::Status::Available(release) => self.install_update(ctx, release),

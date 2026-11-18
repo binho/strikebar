@@ -4,6 +4,19 @@ Small native app for redacting parts of images. Rust + egui (eframe). Runs on ma
 
 ![Strikebar with names, amounts and a signature blacked out in a memo](docs/screenshots/blackout.png)
 
+## Download
+
+**macOS 11 or newer, Apple silicon:** get `Strikebar-<version>-apple-silicon.dmg` from the [latest release](https://github.com/binho/strikebar/releases/latest), open it and drag Strikebar onto Applications.
+
+Strikebar isn't notarized by Apple yet, so macOS blocks the first launch:
+
+- **macOS 15 and newer:** open Strikebar, close the warning, then go to System Settings → Privacy & Security and click *Open Anyway* next to Strikebar.
+- **macOS 14 and older:** right-click Strikebar in Applications, choose *Open*, then *Open* again.
+
+After that it opens normally. New versions install from inside the app: Settings → General → Updates → *Install and relaunch*. Each download is checked against Strikebar's release signing key before it's installed.
+
+**Intel Macs, Windows and Linux:** no downloads yet. [Build it from source](#build-requirements).
+
 ## Build requirements
 
 HEIC/HEIF support uses [libheif](https://github.com/strukturag/libheif) (via `libheif-rs`), found with `pkg-config`:
@@ -32,7 +45,7 @@ The bundle is self-contained (runs without Homebrew):
 - `scripts/bundle-macos.sh` builds the app against it (in `target/bundle`, so dev builds keep using Homebrew's libheif), copies `libheif` and `libde265` into `Contents/Frameworks`, relinks them via `@rpath`, adds their LGPL-3.0 licenses under `Contents/Resources/licenses`, re-signs ad hoc, and fails if anything still points outside the app.
 - libde265 is built from source too, so the app runs on macOS 11 and newer. `LSMinimumSystemVersion` is set to the newest macOS any bundled binary requires.
 - The icon is `assets/icon.svg`. After editing it, run `./scripts/make-icon.sh` (needs `brew install resvg`) to regenerate `assets/Strikebar.icns` and `assets/icon-256.png`, which are kept in the repo so building doesn't need resvg.
-- It's signed ad hoc, not notarized: on another Mac, open it with right-click → Open the first time.
+- It's signed ad hoc, not notarized: the first launch on another Mac needs the steps in [Download](#download).
 
 ### Releases and updates
 
@@ -70,6 +83,22 @@ The bundle is self-contained (runs without Homebrew):
   - *Saving*: copies go next to the original or into a folder you pick; the name gets a suffix or prefix (`-redacted` by default; taken names are numbered, so a copy never replaces anything); JPEG quality (50–100, default 92, also used for HEIC and GIF copies); the save size at launch; and what happens after saving (stay, show the file in Finder/Explorer, or go to the next image).
 - **Size**: the picker next to the save buttons scales saved images down to a long side of 3840, 2560, 1920, 1280 or 800 px (default: original size). It applies to every save, overwrite included, and never enlarges smaller images; hover it to see the resulting size. Scaling happens after redacting, so redacted areas stay redacted.
 
+### Light and dark
+
+Settings → General → Appearance: follow the system (Auto), or always light or dark.
+
+<p>
+  <img src="docs/screenshots/blackout.png" width="49%" alt="The redacted memo in the dark theme">
+  <img src="docs/screenshots/light.png" width="49%" alt="The same memo in the light theme">
+</p>
+
+### Settings
+
+<p>
+  <img src="docs/screenshots/settings-general.png" width="49%" alt="Settings, General tab: appearance, new boxes, strength and updates">
+  <img src="docs/screenshots/settings-saving.png" width="49%" alt="Settings, Saving tab: where copies go, file name, JPEG quality, default size and what happens after saving">
+</p>
+
 ## Notes on safety
 
 - HEIC rotation (as stored by iPhones) is applied by libheif when decoding.
@@ -97,8 +126,10 @@ The screenshots above and the Mac App Store ones are generated, so they can be r
 ./marketing/capture.sh       # → target/marketing/appstore/*.png (2560×1600) and framed/readme/*.png
 ```
 
+Copy the ones the README uses from `target/marketing/framed/readme/` to `docs/screenshots/`: `01-blackout` → `blackout.png`, `02-pixelate` → `pixelate.png`, `03-pills` → `pills.png`, `06-light` → `light.png`, `07-settings` → `settings-general.png`, `08-settings-saving` → `settings-saving.png`.
+
 - `marketing/documents/` holds fictional documents (made-up companies, people and numbers) as HTML. Headless Chrome renders them and reports where each `data-r` element is, in image pixels.
-- `marketing/scenes/` are scene scripts: which document to show, where to put boxes (`box @name`), what to select, which menu to open. The app runs them in capture mode (`STRIKEBAR_SCREENSHOTS=<folder>`, see `src/screenshots.rs`) and saves the window at 1280×800 points, 2560×1600 pixels.
+- `marketing/scenes/` are scene scripts: which document to show, where to put boxes (`box @name`), what to select, which menu to open, light or dark. Scenes 01–05 are the App Store set; 06–08 are only for the README. The app runs them in capture mode (`STRIKEBAR_SCREENSHOTS=<folder>`, see `src/screenshots.rs`) and saves the window at 1280×800 points, 2560×1600 pixels.
 - `scripts/frame-screenshots.sh` adds the traffic lights (macOS draws them, so the app's own capture lacks them), and `marketing/frame.html` adds each App Store headline.
 
 ## License

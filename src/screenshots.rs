@@ -16,7 +16,8 @@
 //! select 1                          # 0-based box index, or `none`
 //! size 1920                         # save size preset (`original` for none)
 //! menu size                         # open the save size menu (or `menu settings [saving]`,
-//!                                   # `menu default-size`: Settings → Saving → Default size)
+//!                                   # `menu default-size`: Settings → Saving → Default size;
+//!                                   # `menu none` closes Settings and any open menu)
 //! save                              # save a copy of the shown image (or `save-all`)
 //! window 900 700                    # window size in points for this and later shots
 //! theme light                       # `light`, `dark` or `auto` (default: dark)
@@ -64,6 +65,7 @@ pub enum Command {
     Size(SaveSize),
     OpenSizeMenu,
     OpenDefaultSizeMenu,
+    CloseMenus,
     /// Open Settings, on the Saving tab if `true`.
     OpenSettings(bool),
     Save,
@@ -241,6 +243,7 @@ fn parse_line(cmd: &str, args: &[&str]) -> Result<Option<Command>, String> {
         ("menu", ["settings"]) => Command::OpenSettings(false),
         ("menu", ["settings", "saving"]) => Command::OpenSettings(true),
         ("menu", ["default-size"]) => Command::OpenDefaultSizeMenu,
+        ("menu", ["none"]) => Command::CloseMenus,
         ("update", ["check"]) => Command::UpdateCheck,
         ("update", ["install"]) => Command::UpdateInstall,
         ("window", [w, h]) => Command::Window(num(w)?, num(h)?),

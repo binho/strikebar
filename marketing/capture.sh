@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Builds the Mac App Store screenshots end to end:
+# Builds the Mac App Store and README screenshots end to end:
 #   1. renders the fictional documents (render-documents.sh)
 #   2. opens them in Strikebar's capture mode and runs each scene in scenes/
 #   3. adds the traffic lights (scripts/frame-screenshots.sh)
 #   4. puts each capture in an App Store frame with its headline (frame.html)
 #
-# Output: target/marketing/appstore/NN-name.png, 2560×1600.
+# Output: target/marketing/appstore/NN-name.png, 2560×1600, for scenes with a
+# headline below; target/marketing/framed/readme/NN-name.png (1400 px, rounded,
+# shadowed) for every scene, which go in docs/screenshots.
 # Needs: target/Strikebar.app (scripts/bundle-macos.sh), Google Chrome, ImageMagick.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,7 +33,6 @@ rm -rf "$OUT"
 mkdir -p "$SHOTS" "$OUT/appstore"
 ./marketing/render-documents.sh "$DOCS"
 
-pkill -x strikebar 2>/dev/null || true
 STRIKEBAR_SCREENSHOTS=$SHOTS "$APP" "$DOCS/board-memo.png" "$DOCS/chat-screenshot.png" \
   "$DOCS/lab-report.png" >"$OUT/app.log" 2>&1 &
 APP_PID=$!
@@ -71,6 +72,7 @@ grep "^scene:" "$OUT/app.log" >&2 || true
 ./scripts/frame-screenshots.sh "$SHOTS" "$OUT/framed" >/dev/null
 for shot in "$OUT"/framed/appstore/*.png; do
   name=$(basename "$shot" .png)
+  [[ -n "$(title "$name")" ]] || continue # README-only scene
   IFS='|' read -r t s <<<"$(title "$name")"
   url="file://$ROOT/marketing/frame.html?img=$(python3 -c 'import sys, urllib.parse as u; print(u.quote(sys.argv[1]))' "file://$shot")&title=$(python3 -c 'import sys, urllib.parse as u; print(u.quote(sys.argv[1]))' "$t")&sub=$(python3 -c 'import sys, urllib.parse as u; print(u.quote(sys.argv[1]))' "$s")"
   "$CHROME" --headless --disable-gpu --hide-scrollbars --allow-file-access-from-files \
