@@ -12,7 +12,7 @@ use crate::redact::{self, FillColor, Region, SaveSize, Shape, Style};
 use crate::screenshots::{Capture, Command};
 use crate::settings::{self, AfterSave, Settings, Strength, Tools};
 use crate::theme::{self, Icon};
-use crate::{system, update};
+use crate::{shortcuts, system, update};
 
 const MIN_ZOOM: f32 = 0.02;
 const MAX_ZOOM: f32 = 32.0;
@@ -602,41 +602,6 @@ fn pending_row(ui: &mut egui::Ui, p: &Pending) {
     );
 }
 
-/// Shortcut list shown from the status bar.
-fn shortcuts_help(ui: &mut egui::Ui) {
-    ui.label(RichText::new("Shortcuts").strong().color(theme::text()));
-    ui.add_space(4.0);
-    egui::Grid::new("shortcuts")
-        .num_columns(2)
-        .spacing([18.0, 4.0])
-        .show(ui, |ui| {
-            for (keys, what) in [
-                ("Drag", "Draw a box"),
-                ("Click box", "Select it"),
-                ("Drag box / handles", "Move / resize"),
-                ("F  /  P", "Fill / pixelate"),
-                ("Drag ○ above a box", "Rotate (Shift snaps to 15°)"),
-                ("⌫", "Delete box, or image in the list"),
-                ("Right-click", "Delete box"),
-                ("Esc", "Deselect"),
-                ("⌘Z", "Undo last box"),
-                ("Space + drag, scroll", "Pan"),
-                ("⌘+  ⌘−  pinch", "Zoom"),
-                ("0  /  1", "Fit / 100%"),
-                ("↑  ↓", "Previous / next image"),
-                ("⌘O  /  ⌘S", "Open / save copy"),
-            ] {
-                ui.label(
-                    RichText::new(keys)
-                        .font(egui::FontId::monospace(12.0))
-                        .color(theme::text_muted()),
-                );
-                ui.label(RichText::new(what).color(theme::text()));
-                ui.end_row();
-            }
-        });
-}
-
 /// An image that's still being decoded; shown as a placeholder row.
 struct Pending {
     seq: u64,
@@ -680,6 +645,7 @@ pub struct StrikebarApp {
     open_default_size_menu: bool,
     settings: Settings,
     settings_open: bool,
+    shortcuts_open: bool,
     settings_tab: SettingsTab,
     updates: update::Checker,
     #[cfg(target_os = "macos")]
@@ -809,6 +775,7 @@ impl StrikebarApp {
             open_default_size_menu: false,
             settings,
             settings_open: false,
+            shortcuts_open: false,
             settings_tab: SettingsTab::General,
             updates,
             #[cfg(target_os = "macos")]
@@ -1073,8 +1040,10 @@ impl StrikebarApp {
                         SettingsTab::General
                     };
                 }
+                Command::OpenShortcuts => self.shortcuts_open = true,
                 Command::CloseMenus => {
                     self.settings_open = false;
+                    self.shortcuts_open = false;
                     egui::Popup::close_all(ctx);
                 }
                 Command::UpdateCheck => self.updates.start(ctx),
@@ -1376,7 +1345,14 @@ impl StrikebarApp {
             self.settings_open = !self.settings_open;
         }
         if self.settings_open {
+            self.shortcuts_open = false;
             return; // the dialog handles its own keys (Esc closes it)
+        }
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Slash)) {
+            self.shortcuts_open = !self.shortcuts_open;
+        }
+        if self.shortcuts_open {
+            return; // same here
         }
         let mut pressed = [false; 14];
         ui.input_mut(|i| {
@@ -2261,7 +2237,9 @@ impl StrikebarApp {
                         .size(14.0)
                         .color(theme::text_muted()),
                 ));
-                shortcuts.on_hover_ui(shortcuts_help);
+                if theme::tooltip(shortcuts, "Keyboard shortcuts", Some("⌘/")).clicked() {
+                    self.shortcuts_open = true;
+                }
                 ui.add_space(8.0);
                 if let update::Status::Available(release) = &self.updates.status {
                     let text =
@@ -2821,6 +2799,9 @@ impl eframe::App for StrikebarApp {
         }
         if self.settings_open {
             self.settings(&ctx);
+        }
+        if self.shortcuts_open && shortcuts::dialog(&ctx) {
+            self.shortcuts_open = false;
         }
 
         egui::Panel::top("title_bar")

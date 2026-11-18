@@ -7,6 +7,7 @@ mod menu;
 mod redact;
 mod screenshots;
 mod settings;
+mod shortcuts;
 mod system;
 mod theme;
 mod update;

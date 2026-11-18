@@ -28,6 +28,8 @@ pub struct Palette {
     pub text_placeholder: Color32,
     pub hover: Color32,
     pub selected: Color32,
+    /// Face of a key on the shortcuts screen.
+    pub keycap: Color32,
     pub accent: Color32,
     pub warning: Color32,
 }
@@ -45,6 +47,7 @@ pub const ONE_DARK: Palette = Palette {
     text_placeholder: hex(0x878a98),
     hover: hex(0x363c46),
     selected: hex(0x454a56),
+    keycap: hex(0x3a404b),
     accent: hex(0x74ade8),
     warning: hex(0xdec184),
 };
@@ -62,6 +65,7 @@ pub const ONE_LIGHT: Palette = Palette {
     text_placeholder: hex(0x7e8086),
     hover: hex(0xdfdfe0),
     selected: hex(0xcacaca),
+    keycap: hex(0xfafafa),
     accent: hex(0x5c78e2),
     warning: hex(0xa48819),
 };
@@ -100,6 +104,7 @@ colors!(
     text_placeholder,
     hover,
     selected,
+    keycap,
     accent,
     warning,
 );
