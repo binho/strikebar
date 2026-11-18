@@ -40,7 +40,7 @@ The bundle is self-contained (runs without Homebrew):
 ./scripts/release.sh 0.2.0            # or: release.sh 0.2.0 notes.md
 ```
 
-- The script bumps the version and runs the tests. It then builds the bundle and zips it as `Strikebar-<version>-macos-<arch>.zip`, and signs the zip with [minisign](https://jedisct1.github.io/minisign/). Next it commits `Release <version>` and tags `v<version>`. Last, after you confirm, it pushes and creates the GitHub release with the zip and its `.minisig`.
+- The script bumps the version and runs the tests. It then builds the bundle and zips it as `Strikebar-<version>-macos-<arch>.zip`, and signs the zip with [minisign](https://jedisct1.github.io/minisign/). It also makes `Strikebar-<version>-apple-silicon.dmg` (`scripts/make-dmg.sh`: the app next to an Applications shortcut), which is the file people download; the zip is for in-app updates. Next it commits `Release <version>` and tags `v<version>`. Last, after you confirm, it pushes and creates the GitHub release with the zip and its `.minisig`.
 - In-app updates read the latest release of `binho/strikebar` from GitHub (Settings → General → Updates). *Install and relaunch* downloads the zip for the Mac's architecture and checks it before installing:
   - the signature must match the public key built into the app (`assets/update-key.pub`);
   - the signature's trusted comment must be that exact file name, so an older signed build can't be passed off as a newer one;
